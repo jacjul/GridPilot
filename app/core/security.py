@@ -3,6 +3,7 @@ import jwt
 from datetime import datetime,timezone,timedelta
 import uuid 
 import hashlib
+from fastapi import HTTPException
 
 from app.core.settings import settings
 passwordhash = PasswordHash.recommended()
@@ -42,6 +43,18 @@ def create_refresh_token(data:dict,exp_days=settings.REFRESH_TOKEN_DAYS)->tuple[
 
 def decode_token(token:str):
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+def decode_token_or_401(token:str, typ:str):
+    try:
+        decoded_refresh_token = decode_token(token)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    if not decoded_refresh_token.get("typ") == typ:
+        raise HTTPException(status_code=401, detail="Wrong token sent")
+    return decoded_refresh_token
 
 def hash_refresh_token(token:str)-> str:
     return hashlib.sha256(token.encode()).hexdigest()
