@@ -1,0 +1,10 @@
+fastapi[standard]
+uvicorn
+psycopg2
+asyncpg
+sqlalchemy
+dotenv
+python-jose[cryptography]
+pwdlib
+pyjwt 
+redis
