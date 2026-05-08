@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 import uuid
-
-from fastapi import HTTPException
+from fastapi import HTTPException,Depends
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Annotated
 
 from app.core.redis import (
     create_refresh_entries,
@@ -23,6 +24,9 @@ from app.core.security import (
 from app.models.token import Token
 from app.models.user import User
 from app.schemas.user import UserMe, UserRegistration
+from app.db.database import get_async_db
+
+oauth2passwordbearer = OAuth2PasswordBearer(tokenUrl="/api/login")
 
 
 async def register_user(db: AsyncSession, user: UserRegistration) -> None:
@@ -138,8 +142,11 @@ async def refresh_issue_tokens(db: AsyncSession, refresh_token_raw: str) -> tupl
 
     return new_access_token, new_refresh_token
 
+async def get_current_user(db: Annotated[AsyncSession, Depends(get_async_db)],
+                            access_token:Annotated[str,Depends(oauth2passwordbearer)])->UserMe:
+    return await get_current_user_service(db,access_token )
 
-async def get_current_user(db: AsyncSession, access_token: str) -> UserMe:
+async def get_current_user_service(db: AsyncSession, access_token: str) -> UserMe:
     decoded_access_token = decode_token_or_401(access_token, "access")
 
     user_id_raw = decoded_access_token.get("sub")

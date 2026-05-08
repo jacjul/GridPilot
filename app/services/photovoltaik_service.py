@@ -37,9 +37,16 @@ class PVForecastService:
         url = f"{self.BASE_URL}/{latitude}/{longitude}/{declination}/{azimuth}/{kwp}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            payload = response.json()
+            
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.HTTPStatusError:
+                raise HTTPException(status_code=502, detail="Forecast provider returned an error")
+            except httpx.RequestError:
+                raise HTTPException(status_code=503, detail="Forecast provider unreachable")
+            
             result = payload.get("result")
             if isinstance(result,list):
                 return result[0] if result else {}
@@ -62,58 +69,58 @@ class PVForecastService:
 }"""
         
     async def get_forecast_for_pv(self, db:AsyncSession, pv_id:Optional[int], pv_owner_id:int):
-        if pv_id:
-            try:
-                result = await db.execute(select(Photovoltaik).where(and_(Photovoltaik.id ==pv_id, Photovoltaik.owner_id==pv_owner_id)))
+        try:
+            if pv_id is not None:
+                result = await db.execute(
+                    select(Photovoltaik).where(
+                        and_(Photovoltaik.id == pv_id, Photovoltaik.owner_id == pv_owner_id)
+                    )
+                )
                 pv = result.scalar_one_or_none()
+            else:
+                result = await db.execute(
+                    select(Photovoltaik).where(Photovoltaik.owner_id == pv_owner_id)
+                )
+                # For now this uses the first PV for the user.
+                pv = result.scalars().first()
+        except SQLAlchemyError:
+            raise HTTPException(status_code=500, detail="Could not query PV")
 
-            except:
-                raise HTTPException(status_code=500, detail="Couldnt find pv_id")
-        else:
-            try:
-                result = await db.execute(select(Photovoltaik).where(Photovoltaik.owner_id==pv_owner_id))
-                pv = result.scalars().first() # this still just get the first PV not all 
-            except:
-                raise HTTPException(status_code=500, detail="Couldnt find PV to the user_id")
-
-
-        # this will only search the first PV for a user not all
-        # for now sufficient but this has to be changed 
-        
         if not pv:
             raise HTTPException(status_code=404, detail="Could not find PV")
-        
 
         lat,lon,dec,az,kwp = pv.get_PV_data()
+        forecast = await self.fetch_data_api(lat,lon,dec,az,kwp)
 
-        forecast = await self.fetch_data_api(lat,lon,dec,az,kwp )
-
-        now_berlin =datetime.now(ZoneInfo("Europe/Berlin"))
+        now_berlin = datetime.now(ZoneInfo("Europe/Berlin"))
         try:
             new_run = PVForecastRun(
-                pv_id = pv.id,
-                requested_at = now_berlin,
-                target_day = now_berlin.date()
+                pv_id=pv.id,
+                requested_at=now_berlin,
+                target_day=now_berlin.date(),
             )
             db.add(new_run)
             await db.flush()
-            points  = []
-            for ts_raw,value in forecast.items():
-                ts = datetime.fromisoformat(ts_raw.replace(" ", "T")).replace(tzinfo=ZoneInfo("Europe/Berlin"))
 
-                new_point =  PVForecastPoint(id_run=new_run.run_id,
-                                            ts = ts ,
-                                            energy_wh = value)# how to add the id of PVForecast
-                points.append(new_point)
+            points = []
+            for ts_raw, value in forecast.items():
+                ts = datetime.fromisoformat(ts_raw.replace(" ", "T")).replace(
+                    tzinfo=ZoneInfo("Europe/Berlin")
+                )
+                points.append(
+                    PVForecastPoint(
+                        id_run=new_run.run_id,
+                        ts=ts,
+                        energy_wh=value,
+                    )
+                )
 
-            
             db.add_all(points)
-
             await db.commit()
-        except:
+        except SQLAlchemyError:
             await db.rollback()
-            raise HTTPException(status_code=409, detail ="Coulnt create Run-Information")
- 
+            raise HTTPException(status_code=409, detail="Could not create run information")
+
         return {"run_id": new_run.run_id, "points_count": len(points)}
 
         
