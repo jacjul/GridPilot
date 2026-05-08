@@ -22,7 +22,7 @@ from app.core.security import (
 )
 from app.models.token import Token
 from app.models.user import User
-from app.schemas.user import UserRegistration
+from app.schemas.user import UserMe, UserRegistration
 
 
 async def register_user(db: AsyncSession, user: UserRegistration) -> None:
@@ -137,3 +137,31 @@ async def refresh_issue_tokens(db: AsyncSession, refresh_token_raw: str) -> tupl
     await db.commit()
 
     return new_access_token, new_refresh_token
+
+
+async def get_current_user(db: AsyncSession, access_token: str) -> UserMe:
+    decoded_access_token = decode_token_or_401(access_token, "access")
+
+    user_id_raw = decoded_access_token.get("sub")
+    if not user_id_raw:
+        raise HTTPException(status_code=401, detail="Missing user identifier in access token")
+
+    try:
+        user_id = int(user_id_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid user identifier in access token")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return UserMe(
+        id=user.id,
+        name=user.name,
+        lastname=user.lastname,
+        username=user.username,
+        email=user.email,
+    )
+
