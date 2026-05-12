@@ -1,0 +1,16 @@
+from pydantic import BaseModel
+from typing import Optional
+
+class BESSCreateform(BaseModel):
+    name: Optional[str]
+    kw_peak_charge:float
+    kw_peak_discharge:Optional[float]
+    kwh:float
+
+class BESSUpdateform(BaseModel):
+    name: Optional[str]
+    kw_peak_charge:Optional[float]
+    kw_peak_discharge:Optional[float]
+    kwh:Optional[float]
+
+

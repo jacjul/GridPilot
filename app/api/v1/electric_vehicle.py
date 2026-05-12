@@ -13,21 +13,7 @@ def create_EV_instance():
     ev_service = EV_service()
     return ev_service
 
-"""List EVs for current user
-Route missing: GET /ev
-Service missing: list_user_evs(user, db)
 
-Get one EV by id
-Route missing: GET /ev/{ev_id}
-Service missing: get_ev(ev_id, user, db)
-
-Update EV core fields (name, charging power, battery)
-Route missing: PATCH /ev/{ev_id}
-Service missing: update_ev(ev_id, payload, user, db)
-
-Delete EV
-Route missing: DELETE /ev/{ev_id}
-Service missing: delete_ev(ev_id, user, db)"""
 
 @router_v1.get("/ev")
 async def get_all_evs(user:Annotated[UserMe,Depends(get_current_user)],
