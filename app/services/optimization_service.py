@@ -1,4 +1,118 @@
 from pulp import *
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload 
+
+from app.schemas.user import UserMe
+from app.models.user import User
+
+class OptimizationService():
+
+    async def _load_current_user(self, user_id:int, db:AsyncSession):
+
+        stmt = select(User).options(
+            selectinload(User.electric_vehicle_owned),
+            selectinload(User.battery_owned), 
+            selectinload(User.photovoltaik_owned),
+            selectinload(User.electricity_owned)
+        ).where(User.id == user_id)
+
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if  user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return user
+
+    def _build_optimizer_input(self, current_user: User) -> dict[str, Any]:
+        # Convert ORM objects to plain structures so the optimizer can work with pure data.
+        return {
+            "user": {
+                "id": current_user.id,
+                "name": current_user.name,
+                "lastname": current_user.lastname,
+                "username": current_user.username,
+            },
+            "photovoltaik": [
+                {
+                    "id": pv.id,
+                    "latitude": pv.latitude,
+                    "longitude": pv.longitude,
+                    "declination": pv.declination,
+                    "azimuth": pv.azimuth,
+                    "kw_peak": pv.kw_peak,
+                }
+                for pv in current_user.photovoltaik_owned
+            ],
+            "electric_vehicles": [
+                {
+                    "id": ev.id,
+                    "ev_name": ev.ev_name,
+                    "kw_peak_loading": ev.kw_peak_loading,
+                    "kwh_battery": ev.kwh_battery,
+                }
+                for ev in current_user.electric_vehicle_owned
+            ],
+            "batteries": [
+                {
+                    "id": battery.id,
+                    "name": battery.name,
+                    "kw_peak_charge": battery.kw_peak_charge,
+                    "kw_peak_discharge": battery.kw_peak_discharge,
+                    "kwh": battery.kwh,
+                }
+                for battery in current_user.battery_owned
+            ],
+            "electricity_prices": [
+                 {
+                    "date": price.date,
+                    "timestamps": price.timestamps,
+                    "price": price.price,
+                }
+                for price in current_user.electricity_owned
+            ],
+        }
+    async def run_day_ahead(self, user:UserMe,db:AsyncSession):
+        current_user = await self._load_current_user(user_id = user.id, db=db)
+
+        optimizer_input = self._build_optimizer_input(current_user)
+
+    
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 hours= range(6)
 prices = [10, 12, 30, 50, 20, 10]
