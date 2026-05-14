@@ -1,27 +1,35 @@
 from sqlalchemy import select, and_
+from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
-from typing import Optional 
+from datetime import datetime, date, timedelta
+from typing import Optional
 from zoneinfo import ZoneInfo
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.photovoltaik import Photovoltaik
-from app.models.PV_forecast import PVForecastRun,PVForecastPoint
+from app.models.PV_forecast import PVForecastRun, PVForecastPoint
 from app.schemas.user import UserMe
 from app.schemas.photovoltaik import PVform
+
 
 class PVForecastService:
     BASE_URL = "https://api.forecast.solar/estimate/watthours"
 
-    async def create_new_PV(self,formdata:PVform,user:UserMe, db:AsyncSession):
-        new_pv = Photovoltaik(latitude=formdata.latitude,
-                            longitude=formdata.longitude,
-                            declination=formdata.declination,
-                            azimuth=formdata.azimuth,
-                            kw_peak=formdata.kw_peak,
-                            owner_id =user.id)
+    def _default_target_days(self) -> list[date]:
+        today_berlin = datetime.now(ZoneInfo("Europe/Berlin")).date()
+        return [today_berlin, today_berlin + timedelta(days=1)]
+
+    async def create_new_PV(self, formdata: PVform, user: UserMe, db: AsyncSession):
+        new_pv = Photovoltaik(
+            latitude=formdata.latitude,
+            longitude=formdata.longitude,
+            declination=formdata.declination,
+            azimuth=formdata.azimuth,
+            kw_peak=formdata.kw_peak,
+            owner_id=user.id,
+        )
 
         try:
             db.add(new_pv)
@@ -32,12 +40,10 @@ class PVForecastService:
             raise HTTPException(status_code=500, detail="Could not add the PV")
         return {"message": "success"}
 
-    async def fetch_data_api(self, latitude, longitude,declination,azimuth,kwp) :
-
+    async def fetch_data_api(self, latitude, longitude, declination, azimuth, kwp):
         url = f"{self.BASE_URL}/{latitude}/{longitude}/{declination}/{azimuth}/{kwp}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            
             try:
                 response = await client.get(url)
                 response.raise_for_status()
@@ -46,29 +52,15 @@ class PVForecastService:
                 raise HTTPException(status_code=502, detail="Forecast provider returned an error")
             except httpx.RequestError:
                 raise HTTPException(status_code=503, detail="Forecast provider unreachable")
-            
+
             result = payload.get("result")
-            if isinstance(result,list):
+            if isinstance(result, list):
                 return result[0] if result else {}
-            if isinstance(result,dict):
+            if isinstance(result, dict):
                 return result
-            raise HTTPException(status_code=502,detail="Unexpected forecast repsonse")
-        
-        """{
-  "result": [
-    {
-      "2000-01-01 08:00": 12.345,
-      "2000-01-01 09:00": 35.801
-    }
-  ],
-  "message": {
-    "code": 0,
-    "type": "success",
-    "text": ""
-  }
-}"""
-        
-    async def get_forecast_for_pv(self, db:AsyncSession, pv_id:Optional[int], pv_owner_id:int):
+            raise HTTPException(status_code=502, detail="Unexpected forecast response")
+
+    async def _resolve_user_pv(self, db: AsyncSession, pv_id: Optional[int], pv_owner_id: int) -> Photovoltaik:
         try:
             if pv_id is not None:
                 result = await db.execute(
@@ -79,48 +71,144 @@ class PVForecastService:
                 pv = result.scalar_one_or_none()
             else:
                 result = await db.execute(
-                    select(Photovoltaik).where(Photovoltaik.owner_id == pv_owner_id)
+                    select(Photovoltaik)
+                    .where(Photovoltaik.owner_id == pv_owner_id)
+                    .order_by(Photovoltaik.id.asc())
+                    .limit(1)
                 )
-                # For now this uses the first PV for the user.
-                pv = result.scalars().first()
+                pv = result.scalar_one_or_none()
         except SQLAlchemyError:
             raise HTTPException(status_code=500, detail="Could not query PV")
 
         if not pv:
             raise HTTPException(status_code=404, detail="Could not find PV")
+        return pv
 
-        lat,lon,dec,az,kwp = pv.get_PV_data()
-        forecast = await self.fetch_data_api(lat,lon,dec,az,kwp)
+    async def _create_forecast_for_pv(self, db: AsyncSession, pv: Photovoltaik, pv_owner_id: int):
+        lat, lon, dec, az, kwp = pv.get_PV_data()
+        forecast = await self.fetch_data_api(lat, lon, dec, az, kwp)
 
         now_berlin = datetime.now(ZoneInfo("Europe/Berlin"))
+        parsed_points: list[tuple[datetime, float]] = []
+        for ts_raw, value in forecast.items():
+            ts = datetime.fromisoformat(ts_raw.replace(" ", "T")).replace(
+                tzinfo=ZoneInfo("Europe/Berlin")
+            )
+            parsed_points.append((ts, value))
+
+        target_day = min((ts.date() for ts, _ in parsed_points), default=now_berlin.date())
+
         try:
             new_run = PVForecastRun(
                 pv_id=pv.id,
+                pv_owner_id=pv_owner_id,
                 requested_at=now_berlin,
-                target_day=now_berlin.date(),
+                target_day=target_day,
             )
             db.add(new_run)
             await db.flush()
 
-            points = []
-            for ts_raw, value in forecast.items():
-                ts = datetime.fromisoformat(ts_raw.replace(" ", "T")).replace(
-                    tzinfo=ZoneInfo("Europe/Berlin")
+            points = [
+                PVForecastPoint(
+                    id_run=new_run.run_id,
+                    ts=ts,
+                    energy_wh=value,
                 )
-                points.append(
-                    PVForecastPoint(
-                        id_run=new_run.run_id,
-                        ts=ts,
-                        energy_wh=value,
-                    )
-                )
-
+                for ts, value in parsed_points
+            ]
             db.add_all(points)
+
             await db.commit()
         except SQLAlchemyError:
             await db.rollback()
             raise HTTPException(status_code=409, detail="Could not create run information")
 
-        return {"run_id": new_run.run_id, "points_count": len(points)}
+    async def _latest_run_for_pv(self, db: AsyncSession, pv_id: int, pv_owner_id: int):
+        stmt = (
+            select(PVForecastRun)
+            .options(selectinload(PVForecastRun.points))
+            .where(
+                PVForecastRun.pv_id == pv_id,
+                PVForecastRun.pv_owner_id == pv_owner_id,
+            )
+            .order_by(PVForecastRun.requested_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
 
-        
+    def _covers_target_days(self, points: list[PVForecastPoint], target_days: list[date]) -> bool:
+        point_days = {p.ts.date() for p in points}
+        return all(day in point_days for day in target_days)
+
+    def _serialize_run(self, run: PVForecastRun, target_days: list[date]) -> dict:
+        target_set = set(target_days)
+        filtered_points = [p for p in run.points if p.ts.date() in target_set]
+        filtered_points.sort(key=lambda p: p.ts)
+
+        return {
+            "run_id": run.run_id,
+            "pv_id": run.pv_id,
+            "target_days": target_days,
+            "points": [
+                {"id_run": p.id_run, "ts": p.ts, "energy_wh": p.energy_wh}
+                for p in filtered_points
+            ],
+        }
+
+    async def get_forecast_for_pv(
+        self,
+        db: AsyncSession,
+        pv_id: Optional[int],
+        pv_owner_id: int,
+        target_days: Optional[list[date]],
+    ):
+        target_days = target_days or self._default_target_days()
+        pv = await self._resolve_user_pv(db, pv_id, pv_owner_id)
+
+        run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
+
+        if run is None or not self._covers_target_days(run.points, target_days):
+            await self._create_forecast_for_pv(db, pv, pv_owner_id)
+            run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
+
+        if run is None:
+            raise HTTPException(status_code=503, detail="Could not obtain PV data")
+
+        return self._serialize_run(run, target_days)
+
+    async def get_forecast_for_pvs(
+        self,
+        db: AsyncSession,
+        pv_owner_id: int,
+        target_days: Optional[list[date]],
+    ):
+        target_days = target_days or self._default_target_days()
+
+        try:
+            result = await db.execute(
+                select(Photovoltaik)
+                .where(Photovoltaik.owner_id == pv_owner_id)
+                .order_by(Photovoltaik.id.asc())
+            )
+            pvs = result.scalars().all()
+        except SQLAlchemyError:
+            raise HTTPException(status_code=500, detail="Could not query PV")
+
+        if not pvs:
+            raise HTTPException(status_code=404, detail="Could not find PV")
+
+        forecasts: list[dict] = []
+        for pv in pvs:
+            run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
+
+            if run is None or not self._covers_target_days(run.points, target_days):
+                await self._create_forecast_for_pv(db, pv, pv_owner_id)
+                run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
+
+            if run is None:
+                raise HTTPException(status_code=503, detail=f"Could not obtain PV data for pv_id={pv.id}")
+
+            forecasts.append(self._serialize_run(run, target_days))
+
+        return forecasts
