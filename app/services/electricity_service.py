@@ -3,13 +3,13 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy import update, select, and_
+from sqlalchemy import update, select, and_, delete
 from typing import Any
 from datetime import datetime, timezone
 
-from app.schemas.electricity import ElectricityCreateform, MarketZone
+from app.schemas.electricity import ElectricityCreateform,ElectricityUpdateForm,ElectricityOut,DynamicPricePointsOut,DynamicPricePointsGet
 from app.schemas.user import UserMe
-from app.models.price_electricity import ElectricityPrice, DynamicPricePoints
+from app.models.price_electricity import ElectricityPrice, DynamicPricePoints,MarketZone
 
 
 class ElectricityService():
@@ -57,7 +57,7 @@ class ElectricityService():
         await self._set_old_price_inactive(user.id, db=db)
 
         try:
-            new_price = ElectricityPrice(**data_to_upload, is_active=True, updated_at=datetime.now(timezone.utc))
+            new_price = ElectricityPrice(**data_to_upload, is_active=True, updated_at=datetime.now())
             db.add(new_price)
             await db.commit()
             await db.refresh(new_price)
@@ -68,6 +68,78 @@ class ElectricityService():
             await db.rollback()
             raise HTTPException(status_code=500, detail="Error when writing to DB")
         return {"message": "success", "new_price_id": new_price.id}
+
+    async def _assert_user_owns_tariff(self, tariff_id: int, user_id: int, db: AsyncSession) -> ElectricityPrice:
+        result = await db.execute(
+            select(ElectricityPrice).where(
+                and_(ElectricityPrice.id == tariff_id, ElectricityPrice.owner_id == user_id)
+            )
+        )
+        tariff = result.scalar_one_or_none()
+        if tariff is None:
+            raise HTTPException(status_code=404, detail="Tariff not found")
+        return tariff
+
+    async def get_tariffs(self, user: UserMe, db: AsyncSession, tariff_id: int | None = None):
+        if tariff_id is not None:
+            tariff = await self._assert_user_owns_tariff(tariff_id, user.id, db)
+            return ElectricityOut.model_validate(tariff)
+
+        result = await db.execute(
+            select(ElectricityPrice)
+            .where(ElectricityPrice.owner_id == user.id)
+            .order_by(ElectricityPrice.updated_at.desc())
+        )
+        tariffs = result.scalars().all()
+        return [ElectricityOut.model_validate(t) for t in tariffs]
+
+    async def update_tariff(self, tariff_id: int, formdata: ElectricityUpdateForm, user: UserMe, db: AsyncSession):
+        current = await self._assert_user_owns_tariff(tariff_id, user.id, db)
+        patch_data = formdata.model_dump(exclude_unset=True, exclude_none=True)
+        if not patch_data:
+            raise HTTPException(status_code=400, detail="No update data provided")
+
+        new_price_typ = patch_data.get("price_typ", current.price_typ)
+        new_fixed_price = patch_data.get("fixed_price", current.fixed_price)
+
+        if new_price_typ == "fixed" and new_fixed_price is None:
+            raise HTTPException(status_code=422, detail="When price_typ is fixed a price is needed")
+        if new_price_typ == "dynamic_EPEX" and new_fixed_price is not None:
+            raise HTTPException(status_code=422, detail="When price_typ is dynamic EPEX fixed price wont be used")
+
+        try:
+            if patch_data.get("is_active") is True:
+                await self._set_old_price_inactive(user.id, db)
+
+            await db.execute(
+                update(ElectricityPrice)
+                .where(ElectricityPrice.id == tariff_id, ElectricityPrice.owner_id == user.id)
+                .values(**patch_data, updated_at=datetime.now())
+            )
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="Tariff conflict")
+        except SQLAlchemyError:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Could not update tariff")
+
+        return {"message": "success", "tariff_id": tariff_id}
+
+    async def delete_tariff(self, tariff_id: int, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_tariff(tariff_id, user.id, db)
+        try:
+            await db.execute(
+                delete(ElectricityPrice).where(
+                    and_(ElectricityPrice.id == tariff_id, ElectricityPrice.owner_id == user.id)
+                )
+            )
+            await db.commit()
+        except SQLAlchemyError:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Could not delete tariff")
+
+        return {"message": "success", "tariff_id": tariff_id}
 
     def _resolve_window(self, start_time=None, end_time=None):
         now = datetime.now(timezone.utc)
@@ -84,7 +156,7 @@ class ElectricityService():
 
         return start_dt, end_dt
 
-    async def _load_cached_points(self, market_zone, db, start_time, end_time):
+    async def _load_cached_points(self, market_zone, db, start_time, end_time)->list[DynamicPricePointsOut]:
         stmt = (
             select(DynamicPricePoints)
             .where(
@@ -97,7 +169,8 @@ class ElectricityService():
             .order_by(DynamicPricePoints.timestamp)
         )
         result = await db.execute(stmt)
-        return result.scalars().all()
+        rows = result.scalars().all()
+        return [DynamicPricePointsOut.model_validate(row) for row in rows]
 
     async def _fetch_EPEX_data(self, market_zone, db, start_time, end_time):
         cached_points = await self._load_cached_points(market_zone, db, start_time, end_time)
@@ -155,8 +228,8 @@ class ElectricityService():
             await db.commit()
             cached_points = await self._load_cached_points(market_zone, db, start_time, end_time)
 
-        datetimes = [point.timestamp for point in cached_points]
-        prices = [point.price for point in cached_points]
+        datetimes:list[datetime] = [point.timestamp for point in cached_points]
+        prices:list[float] = [point.price for point in cached_points]
         return datetimes, prices
 
     async def get_current_DynamicPricePoints(self, user: UserMe, db: AsyncSession):
@@ -170,5 +243,5 @@ class ElectricityService():
             raise HTTPException(status_code=404, detail="There is no dynamic Tarif")
 
         start_time, end_time = self._resolve_window()
-        datetimes, price = await self._fetch_EPEX_data(elec_dynamic.market_zone, db, start_time, end_time)
-        return {"timestamps": datetimes, "price": price}
+        datetimes, prices = await self._fetch_EPEX_data(elec_dynamic.market_zone, db, start_time, end_time)
+        return DynamicPricePointsGet(timestamps=datetimes, prices=prices)

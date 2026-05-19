@@ -1,4 +1,4 @@
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, update, delete
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 import httpx
@@ -7,27 +7,57 @@ from datetime import datetime, date, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 from sqlalchemy.exc import SQLAlchemyError
+import pandas as pd 
 
 from app.models.photovoltaik import Photovoltaik
 from app.models.PV_forecast import PVForecastRun, PVForecastPoint
 from app.schemas.user import UserMe
-from app.schemas.photovoltaik import PVform
+from app.schemas.photovoltaik import PVform,PVOut,PVUpdateForm
 
 
 class PVForecastService:
     BASE_URL = "https://api.forecast.solar/estimate/watthours"
+    GEOCODE_URL = "https://nominatim.openstreetmap.org/search"
 
     def _default_target_days(self) -> list[date]:
         today_berlin = datetime.now(ZoneInfo("Europe/Berlin")).date()
         return [today_berlin, today_berlin + timedelta(days=1)]
 
+    async def _resolve_place_to_coordinates(self, place: str) -> tuple[float, float]:
+        params = {"q": place, "format": "jsonv2", "limit": 1}
+        headers = {"User-Agent": "GridPilot/1.0"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.get(self.GEOCODE_URL, params=params, headers=headers)
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise HTTPException(status_code=502, detail="Geocoding provider returned an error")
+            except httpx.RequestError:
+                raise HTTPException(status_code=503, detail="Geocoding provider unreachable")
+
+        payload = response.json()
+        if not isinstance(payload, list) or not payload:
+            raise HTTPException(status_code=422, detail="Could not resolve place to coordinates")
+
+        best = payload[0]
+        try:
+            lat = float(best["lat"])
+            lon = float(best["lon"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(status_code=502, detail="Invalid geocoding response")
+
+        return lat, lon
+
     async def create_new_PV(self, formdata: PVform, user: UserMe, db: AsyncSession):
+        latitude, longitude = await self._resolve_place_to_coordinates(formdata.place)
+
         new_pv = Photovoltaik(
-            latitude=formdata.latitude,
-            longitude=formdata.longitude,
+            latitude=latitude,
+            longitude=longitude,
             declination=formdata.declination,
             azimuth=formdata.azimuth,
             kw_peak=formdata.kw_peak,
+            einspeiseverguetung=formdata.einspeiseverguetung,
             owner_id=user.id,
         )
 
@@ -38,7 +68,65 @@ class PVForecastService:
         except SQLAlchemyError:
             await db.rollback()
             raise HTTPException(status_code=500, detail="Could not add the PV")
-        return {"message": "success"}
+        return {"message": "success", "latitude": latitude, "longitude": longitude}
+
+    async def _assert_user_owns_pv(self, pv_id: int, user_id: int, db: AsyncSession) -> Photovoltaik:
+        result = await db.execute(
+            select(Photovoltaik).where(
+                and_(Photovoltaik.id == pv_id, Photovoltaik.owner_id == user_id)
+            )
+        )
+        pv = result.scalar_one_or_none()
+        if pv is None:
+            raise HTTPException(status_code=404, detail="Could not find PV")
+        return pv
+
+    async def get_PV_data(self,user:UserMe, db:AsyncSession)-> list[PVOut]:
+        result = await db.execute(select(Photovoltaik).where(Photovoltaik.owner_id ==user.id))
+        rows = result.scalars().all()
+        return [PVOut.model_validate(row) for row in rows]
+
+    async def get_single_PV(self, pv_id: int, user: UserMe, db: AsyncSession) -> PVOut:
+        pv = await self._assert_user_owns_pv(pv_id, user.id, db)
+        return PVOut.model_validate(pv)
+
+    async def update_PV(self, pv_id: int, formdata: PVUpdateForm, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_pv(pv_id, user.id, db)
+
+        patch_data = formdata.model_dump(exclude_unset=True, exclude_none=True)
+        if not patch_data:
+            raise HTTPException(status_code=400, detail="No update data provided")
+
+        if "place" in patch_data:
+            latitude, longitude = await self._resolve_place_to_coordinates(patch_data.pop("place"))
+            patch_data.update({"latitude": latitude, "longitude": longitude})
+
+        try:
+            await db.execute(
+                update(Photovoltaik)
+                .where(and_(Photovoltaik.id == pv_id, Photovoltaik.owner_id == user.id))
+                .values(**patch_data)
+            )
+            await db.commit()
+        except SQLAlchemyError:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Could not update PV")
+
+        return {"message": "success", "pv_id": pv_id}
+
+    async def delete_PV(self, pv_id: int, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_pv(pv_id, user.id, db)
+        try:
+            await db.execute(
+                delete(Photovoltaik)
+                .where(and_(Photovoltaik.id == pv_id, Photovoltaik.owner_id == user.id))
+            )
+            await db.commit()
+        except SQLAlchemyError:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Could not delete PV")
+
+        return {"message": "success", "pv_id": pv_id}
 
     async def fetch_data_api(self, latitude, longitude, declination, azimuth, kwp):
         url = f"{self.BASE_URL}/{latitude}/{longitude}/{declination}/{azimuth}/{kwp}"
@@ -146,6 +234,7 @@ class PVForecastService:
         filtered_points = [p for p in run.points if p.ts.date() in target_set]
         filtered_points.sort(key=lambda p: p.ts)
 
+
         return {
             "run_id": run.run_id,
             "pv_id": run.pv_id,
@@ -154,7 +243,8 @@ class PVForecastService:
                 {"id_run": p.id_run, "ts": p.ts, "energy_wh": p.energy_wh}
                 for p in filtered_points
             ],
-        }
+            
+        } 
 
     async def get_forecast_for_pv(
         self,
@@ -210,5 +300,6 @@ class PVForecastService:
                 raise HTTPException(status_code=503, detail=f"Could not obtain PV data for pv_id={pv.id}")
 
             forecasts.append(self._serialize_run(run, target_days))
+
 
         return forecasts

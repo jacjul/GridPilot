@@ -38,7 +38,7 @@ class ElectricityPrice(Base):
 
     __tablename__ = "electricity_price"
 
-    __table_args__ = (UniqueConstraint("owner_id","name", name="uq_owner_name" ))
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_owner_name"),)
 
     id:Mapped[int] = mapped_column(primary_key=True)
     owner_id:Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))

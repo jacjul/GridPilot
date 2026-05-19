@@ -21,7 +21,8 @@ class Photovoltaik(Base):
     declination:Mapped[float]= mapped_column(Float ,nullable=False)
     azimuth:Mapped[float]= mapped_column(Float ,nullable=False)
     kw_peak:Mapped[float]= mapped_column(Float ,nullable=False)
-    
+    einspeiseverguetung:Mapped[float] = mapped_column(Float,default =0)
+
     owner_id:Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"),nullable=False, index=True)
     owner:Mapped["User"] = relationship("User", back_populates="photovoltaik_owned")
 

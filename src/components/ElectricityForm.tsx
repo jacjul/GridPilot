@@ -1,6 +1,20 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+import { useMutation } from "@tanstack/react-query"
+import { postAPI, APIError } from "../fetchAPI"
 
 type PriceType = "fixed" | "dynamic_EPEX";
+
+type ElectricityCreate = {
+  price_typ: PriceType
+  fixed_price?: number
+  market_zone?: string
+  name?: string
+}
+
+type ElectricityResponse = {
+  message: string
+  new_price_id: number
+}
 
 const marketZones = [
   "AT",
@@ -27,8 +41,39 @@ const ElectricityForm = () => {
   const [fixedPrice, setFixedPrice] = useState<number>(28);
   const [marketZone, setMarketZone] = useState<string>("DE-LU");
 
+  const { mutate, isPending, error } = useMutation<ElectricityResponse, APIError, ElectricityCreate>({
+    mutationFn: async (payload) => {
+      return postAPI<ElectricityResponse>("/api/electricity", payload, {
+        token: localStorage.getItem("access_token") ?? "",
+        credentials: "include"
+      })
+    },
+    onSuccess: async () => {
+      setName("")
+      setPriceType("fixed")
+      setFixedPrice(28)
+      setMarketZone("DE-LU")
+    }
+  })
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+
+    if (priceType === "fixed" && fixedPrice <= 0) {
+      alert("Fixed price must be > 0")
+      return
+    }
+
+    mutate({
+      price_typ: priceType,
+      fixed_price: priceType === "fixed" ? fixedPrice : undefined,
+      market_zone: priceType === "dynamic_EPEX" ? marketZone : undefined,
+      name: name.trim() || undefined,
+    })
+  }
+
   return (
-    <div className="space-y-4 p-2">
+    <form className="space-y-4 p-2" onSubmit={handleSubmit}>
       <div className="space-y-1">
         <label className="block text-sm text-left text-slate-700" htmlFor="electricity_name">
           Tariff Name (optional)
@@ -96,7 +141,13 @@ const ElectricityForm = () => {
           ))}
         </select>
       </div>
-    </div>
+
+      <button className="border rounded-xl px-3 py-1" type="submit" disabled={isPending}>
+        {isPending ? "Saving..." : "+ add electricity"}
+      </button>
+
+      {error ? <p className="text-sm text-red-600">{error.message}</p> : null}
+    </form>
   );
 };
 

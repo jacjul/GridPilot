@@ -7,6 +7,11 @@ class EVform(BaseModel):
     kw_peak_loading:float
     kwh_battery:float
 
+class EVUpdateForm(BaseModel):
+    ev_name: Optional[str] = None
+    kw_peak_loading: Optional[float] = None
+    kwh_battery: Optional[float] = None
+
 
 class EVDowntimeRuleCreate(BaseModel):
     ev_id :int 

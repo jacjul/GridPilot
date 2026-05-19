@@ -5,5 +5,7 @@ asyncpg
 sqlalchemy
 dotenv
 python-jose[cryptography]
-pwdlib
-jwt 
+pwdlib[argon2]
+pyjwt
+redis
+pulp

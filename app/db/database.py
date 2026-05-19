@@ -12,7 +12,7 @@ def _create_async_url(db_url:str)->str:
     if parsed.drivername =="postgresql+asyncpg":
         return db_url
     if parsed.drivername.startswith("postgresql"):
-        return str(parsed.set(drivername="postgresql+asyncpg"))
+        return parsed.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
     raise ValueError("Only Postgresql is supported so far. " \
     "Has to change _create_async_engine to user other db")
 

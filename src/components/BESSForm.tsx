@@ -1,13 +1,52 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+import {useMutation} from "@tanstack/react-query"
+import {postAPI,APIError} from "../fetchAPI"
+type BESSCreate = {
+    name?: string
+    kw_peak_charge:number
+    kw_peak_discharge?:number
+    kwh:number
+}
 
+type BESSResponse = {
+  message:string
+  bess_id:number
+}
 const BESSForm = () => {
   const [name, setName] = useState<string>("");
   const [kwh, setKwh] = useState<number>(13.5);
   const [kwPeakCharge, setKwPeakCharge] = useState<number>(5);
   const [kwPeakDischarge, setKwPeakDischarge] = useState<number>(5);
 
+
+  const {mutate,isPending,error} = useMutation<BESSResponse,APIError,BESSCreate>({
+    mutationFn: async(payload)=>{
+      return postAPI<BESSResponse>("/api/bess", payload,{token:localStorage.getItem("access_token")?? "",
+        credentials: "include"
+      })
+    },
+    onSuccess: async()=>{
+      setKwh(0)
+      setKwPeakCharge(0)
+      setKwPeakDischarge(0)
+    }
+  })
+
+  function handleSubmit(e:FormEvent<HTMLFormElement>){
+    e.preventDefault()
+    if (kwh <= 0 || kwPeakCharge <= 0 || kwPeakDischarge <= 0){
+      alert("Values must be > 0")
+      return
+    }
+    mutate({
+    name: name ?? "",
+    kw_peak_charge:kwPeakCharge,
+    kw_peak_discharge:kwPeakDischarge ??kwPeakCharge,
+    kwh:kwh
+    })
+  }
   return (
-    <div className="space-y-4 p-2">
+    <form className="space-y-4 p-2" onSubmit={handleSubmit}>
       <div className="space-y-1">
         <label className="block text-sm text-left text-slate-700" htmlFor="bess_name">
           Name (optional)
@@ -78,7 +117,12 @@ const BESSForm = () => {
           <span className="text-sm text-slate-500">kW</span>
         </div>
       </div>
-    </div>
+            <button className="border rounded-xl px-3 py-1" type="submit" disabled={isPending}>
+                {isPending ? "Saving..." : "+ add BESS"}
+            </button>
+
+            {error ? <p className="text-sm text-red-600">{error.message}</p> : null}
+    </form>
   );
 };
 

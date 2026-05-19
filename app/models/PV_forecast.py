@@ -7,12 +7,15 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.photovoltaik import Photovoltaik
+    from app.models.user import User
+
 
 class PVForecastRun(Base):
     __tablename__ = "pv_forecast"
 
     run_id:Mapped[int] = mapped_column(primary_key = True)
     pv_id:Mapped[int] =mapped_column (ForeignKey("photovoltaik.id" , ondelete="CASCADE"))
+    pv_owner_id:Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     requested_api:Mapped[str] = mapped_column(default="forecast.solar")
     requested_at:Mapped[datetime] = mapped_column(DateTime(timezone=True))
     target_day: Mapped[date] = mapped_column(Date, nullable=False, index=True)

@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import select,update,delete
 
-from app.schemas.electric_vehicle import EVform,EVDowntimeRuleCreate,EVDowntimeRuleUpdate
+from app.schemas.electric_vehicle import EVform,EVUpdateForm,EVDowntimeRuleCreate,EVDowntimeRuleUpdate
 from app.schemas.user import UserMe
 from app.models.electric_vehicle import ElectricVehicle,EVDowntimeRule
 
@@ -16,7 +16,16 @@ class EV_service():
         
     async def list_user_evs(self, user:UserMe, db:AsyncSession):
         response = await db.execute(select(ElectricVehicle).where(ElectricVehicle.owner_id == user.id))
-        ####evs = response.map
+        evs = response.scalars().all()
+        return [
+            {
+                "id": ev.id,
+                "ev_name": ev.ev_name,
+                "kw_peak_loading": ev.kw_peak_loading,
+                "kwh_battery": ev.kwh_battery,
+            }
+            for ev in evs
+        ]
     async def create_new_EV(self,formdata:EVform,user:UserMe,db:AsyncSession):
         if formdata.kw_peak_loading<= 0 or formdata.kwh_battery<= 0:
             raise HTTPException(status_code=422, detail="kw peak and kwh have to be greater then 0")
@@ -37,6 +46,61 @@ class EV_service():
             raise HTTPException(status_code=500, detail = "Could not create EV")
         
         return {"message": "success", "ev_id": new_ev.id}
+
+    async def get_single_ev(self, ev_id: int, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_ev(ev_id=ev_id, user_id=user.id, db=db)
+        ev = await db.scalar(select(ElectricVehicle).where(ElectricVehicle.id == ev_id))
+        if ev is None:
+            raise HTTPException(status_code=404, detail="EV not found")
+        return {
+            "id": ev.id,
+            "ev_name": ev.ev_name,
+            "kw_peak_loading": ev.kw_peak_loading,
+            "kwh_battery": ev.kwh_battery,
+        }
+
+    async def update_ev(self, ev_id: int, formdata: EVUpdateForm, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_ev(ev_id=ev_id, user_id=user.id, db=db)
+        patch_data = formdata.model_dump(exclude_unset=True, exclude_none=True)
+        if not patch_data:
+            raise HTTPException(status_code=400, detail="No update data provided")
+
+        if "kw_peak_loading" in patch_data and patch_data["kw_peak_loading"] <= 0:
+            raise HTTPException(status_code=422, detail="kw_peak_loading has to be greater then 0")
+        if "kwh_battery" in patch_data and patch_data["kwh_battery"] <= 0:
+            raise HTTPException(status_code=422, detail="kwh_battery has to be greater then 0")
+
+        try:
+            await db.execute(
+                update(ElectricVehicle)
+                .where(ElectricVehicle.id == ev_id, ElectricVehicle.owner_id == user.id)
+                .values(**patch_data)
+            )
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="Could not update EV")
+        except SQLAlchemyError:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Could not update EV")
+
+        return {"message": "success", "ev_id": ev_id}
+
+    async def delete_ev(self, ev_id: int, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_ev(ev_id=ev_id, user_id=user.id, db=db)
+        try:
+            await db.execute(
+                delete(ElectricVehicle).where(ElectricVehicle.id == ev_id, ElectricVehicle.owner_id == user.id)
+            )
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="Could not delete EV")
+        except SQLAlchemyError:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Could not delete EV")
+
+        return {"message": "success", "ev_id": ev_id}
     
     async def create_new_blocker(self, formdata:EVDowntimeRuleCreate,user:UserMe,db:AsyncSession):
         

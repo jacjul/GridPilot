@@ -58,9 +58,18 @@ async def refresh_access_and_refresh_token(
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 @router_v1.post("/logout")
-async def logout(request:Request, db:Annotated[AsyncSession, Depends(get_async_db)]):
+async def logout(response: Response, request:Request, db:Annotated[AsyncSession, Depends(get_async_db)]):
 
-    token = request.cookies.get("refresh")
+    _ = request.cookies.get("refresh")
+
+    response.delete_cookie(
+        key="refresh",
+        httponly=True,
+        secure=settings.SECURE_COOKIE,
+        samesite=settings.SAMESITE_COOKIE.value,
+    )
+
+    return {"message": "logged out"}
 
     
 

@@ -28,4 +28,4 @@ class User(Base):
     battery_owned:Mapped[list["Battery"]] = relationship("Battery", back_populates="owner", cascade="all, delete-orphan",passive_deletes=True)
     electricity_owned:Mapped[list["ElectricityPrice"]] = relationship("ElectricityPrice", back_populates="owner", cascade="all, delete-orphan",passive_deletes=True)
 
-    refresh_tokens:Mapped[list["Token"]] = relationship("Token", back_populates="user" cascade="all, delete-orphan")
+    refresh_tokens:Mapped[list["Token"]] = relationship("Token", back_populates="user", cascade="all, delete-orphan")
