@@ -9,11 +9,11 @@ class SAMESITE(Enum):
     NONE = "none"
 
 class Settings(BaseSettings):
-    path_env_file:ClassVar[Path] = Path(__file__).resolve().parent.parent / ".env"
+    path_env_file:ClassVar[Path] = Path(__file__).resolve().parent.parent / ".env.production"
     
     model_config = SettingsConfigDict(env_file=path_env_file, env_file_encoding="utf-8")
 
-    ENV:str = "dev"
+    ENV:str = "prod"
 
     DATABASE_URL:str
     REDIS_URL:str
@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_DAYS:int
     
     #refresh token default
-    SECURE_COOKIE:bool= False
+    SECURE_COOKIE:bool
     SAMESITE_COOKIE:SAMESITE= SAMESITE.LAX
+
+    LOG_LEVEL :str = "INFO"
 
 settings = Settings()
     

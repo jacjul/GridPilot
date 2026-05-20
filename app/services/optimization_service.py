@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,8 @@ from app.services.photovoltaik_service import PVForecastService
 
 class OptimizationService:
     SLOT_HOURS = 0.25
+    MIN_PV_TIME = time(5, 0)
+    MAX_PV_TIME = time(21, 30)
 
     @staticmethod
     def _require_float(value: Any, field_name: str, context: str) -> float:
@@ -254,11 +256,15 @@ class OptimizationService:
 
         pv_series_wh = pv_series_wh.reindex(expected_ts_berlin).interpolate(method="time").fillna(0.0)
 
-        # Convert Wh/slot -> kWh/slot and constrain by physical PV limit with light tolerance.
+        # Safety net: force zero PV outside daylight bounds to avoid interpolation leakage at night.
+        night_mask = (
+            (pv_series_wh.index.time < self.MIN_PV_TIME)
+            | (pv_series_wh.index.time >= self.MAX_PV_TIME)
+        )
+        pv_series_wh.loc[night_mask] = 0.0
+
+        # Convert Wh/slot -> kWh/slot.
         kwh_series = (pv_series_wh / 1000.0).clip(lower=0.0)
-        max_slot_kwh = max(0.0, pv_kw_peak_sum * self.SLOT_HOURS * 1.2)
-        if max_slot_kwh > 0:
-            kwh_series = kwh_series.clip(upper=max_slot_kwh)
 
         return kwh_series.astype(float).tolist()
 
@@ -608,9 +614,10 @@ class OptimizationService:
             if not timestamps:
                 raise HTTPException(status_code=503, detail="No dynamic prices available")
 
-            dynamic_prices_ct_per_kwh = self._normalize_epex_to_ct_per_kwh(dynamic_prices)
+            dynamic_prices_ct_per_kwh = self._normalize_epex_to_ct_per_kwh(dynamic_prices) 
             df = pd.DataFrame({"ts": timestamps, "price": dynamic_prices_ct_per_kwh})
             df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert("Europe/Berlin")
+            df["price"] = df["price"] + 5 + 3.56 #stromabgaben + netzentgelte
             df = df.sort_values("ts")
 
             price_series = (

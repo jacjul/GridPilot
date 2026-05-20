@@ -3,7 +3,7 @@ from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time
 from typing import Optional
 from zoneinfo import ZoneInfo
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,7 +17,24 @@ from app.schemas.photovoltaik import PVform,PVOut,PVUpdateForm
 
 class PVForecastService:
     BASE_URL = "https://api.forecast.solar/estimate/watthours"
+    PVGIS_URL = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
     GEOCODE_URL = "https://nominatim.openstreetmap.org/search"
+    SUN_API_URL = "https://api.sunrise-sunset.org/json"
+    MIN_SUNRISE_TIME = time(4, 30)
+    MAX_SUNSET_TIME = time(22, 30)
+
+    @staticmethod
+    def _merge_points_keep_lowest_energy(
+        points: list[tuple[datetime, float]],
+    ) -> list[tuple[datetime, float]]:
+        # Keep one point per timestamp and prefer lower energy so zero anchors win.
+        merged: dict[datetime, float] = {}
+        for ts, energy in points:
+            if ts in merged:
+                merged[ts] = min(merged[ts], float(energy))
+            else:
+                merged[ts] = float(energy)
+        return sorted(merged.items(), key=lambda item: item[0])
 
     def _default_target_days(self) -> list[date]:
         today_berlin = datetime.now(ZoneInfo("Europe/Berlin")).date()
@@ -101,6 +118,8 @@ class PVForecastService:
             latitude, longitude = await self._resolve_place_to_coordinates(patch_data.pop("place"))
             patch_data.update({"latitude": latitude, "longitude": longitude})
 
+        patch_data["updated_at"] = datetime.now(ZoneInfo("Europe/Berlin"))
+
         try:
             await db.execute(
                 update(Photovoltaik)
@@ -128,25 +147,273 @@ class PVForecastService:
 
         return {"message": "success", "pv_id": pv_id}
 
-    async def fetch_data_api(self, latitude, longitude, declination, azimuth, kwp):
+    async def _fetch_data_api_forecast_solar(self, latitude, longitude, declination, azimuth, kwp):
         url = f"{self.BASE_URL}/{latitude}/{longitude}/{declination}/{azimuth}/{kwp}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-                payload = response.json()
-            except httpx.HTTPStatusError:
-                raise HTTPException(status_code=502, detail="Forecast provider returned an error")
-            except httpx.RequestError:
-                raise HTTPException(status_code=503, detail="Forecast provider unreachable")
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
 
-            result = payload.get("result")
-            if isinstance(result, list):
-                return result[0] if result else {}
-            if isinstance(result, dict):
-                return result
-            raise HTTPException(status_code=502, detail="Unexpected forecast response")
+        result = payload.get("result")
+        if isinstance(result, list):
+            return result[0] if result else {}
+        if isinstance(result, dict):
+            return result
+        raise ValueError("Unexpected forecast.solar response")
+
+    @staticmethod
+    def _parse_pvgis_power_w(hour_entry: dict) -> float | None:
+        for key in ("P", "Pdc", "P_AC", "power"):
+            value = hour_entry.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    async def _fetch_data_api_pvgis_fallback(self, latitude, longitude, declination, azimuth, kwp):
+        now_berlin = datetime.now(ZoneInfo("Europe/Berlin"))
+        candidate_years = [
+            now_berlin.year - 1,
+            now_berlin.year - 2,
+            now_berlin.year - 3,
+            2020,
+            2019,
+            2018,
+        ]
+        # Keep order, remove duplicates, and ignore invalid years.
+        unique_years: list[int] = []
+        for year in candidate_years:
+            if year >= 2005 and year not in unique_years:
+                unique_years.append(year)
+
+        payload = None
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            last_error: Exception | None = None
+            for year in unique_years:
+                pvgis_params = {
+                    "lat": latitude,
+                    "lon": longitude,
+                    "startyear": year,
+                    "endyear": year,
+                    "pvcalculation": 1,
+                    "peakpower": kwp,
+                    "loss": 14,
+                    "angle": declination,
+                    "aspect": azimuth,
+                    "outputformat": "json",
+                }
+
+                try:
+                    response = await client.get(self.PVGIS_URL, params=pvgis_params)
+                    response.raise_for_status()
+                    payload = response.json()
+                    break
+                except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                    last_error = exc
+                    continue
+
+            if payload is None:
+                if last_error:
+                    raise last_error
+                raise ValueError("PVGIS fallback could not fetch data")
+
+        outputs = payload.get("outputs", {})
+        hourly = outputs.get("hourly")
+        if not isinstance(hourly, list) or not hourly:
+            raise ValueError("Unexpected PVGIS response")
+
+        lookup_by_month_day_hour: dict[tuple[int, int, int], float] = {}
+        for row in hourly:
+            if not isinstance(row, dict):
+                continue
+            time_raw = row.get("time")
+            if not isinstance(time_raw, str):
+                continue
+            try:
+                row_ts = datetime.strptime(time_raw, "%Y%m%d:%H%M")
+            except ValueError:
+                continue
+
+            power_w = self._parse_pvgis_power_w(row)
+            if power_w is None:
+                continue
+
+            key = (row_ts.month, row_ts.day, row_ts.hour)
+            lookup_by_month_day_hour[key] = max(0.0, power_w)
+
+        if not lookup_by_month_day_hour:
+            raise ValueError("PVGIS fallback had no usable hourly values")
+
+        result: dict[str, float] = {}
+        horizon_hours = 48
+        start_hour = now_berlin.replace(hour=0, minute=0, second=0, microsecond=0)
+        for offset in range(horizon_hours):
+            ts = start_hour + timedelta(hours=offset)
+            key = (ts.month, ts.day, ts.hour)
+            power_w = lookup_by_month_day_hour.get(key, 0.0)
+            energy_wh = max(0.0, power_w)
+            result[ts.strftime("%Y-%m-%d %H:%M:%S")] = energy_wh
+
+        if not result:
+            raise ValueError("PVGIS fallback could not build forecast")
+
+        return result
+
+    async def fetch_data_api(self, latitude, longitude, declination, azimuth, kwp) -> tuple[dict[str, float], str]:
+        try:
+            forecast = await self._fetch_data_api_forecast_solar(
+                latitude,
+                longitude,
+                declination,
+                azimuth,
+                kwp,
+            )
+            return forecast, "forecast.solar"
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError):
+            pass
+
+        try:
+            forecast = await self._fetch_data_api_pvgis_fallback(
+                latitude,
+                longitude,
+                declination,
+                azimuth,
+                kwp,
+            )
+            return forecast, "pvgis_fallback"
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError):
+            raise HTTPException(status_code=503, detail="Both PV forecast providers are unavailable")
+
+    async def _fetch_sunrise_sunset_for_day(
+        self,
+        latitude: float,
+        longitude: float,
+        day: date,
+    ) -> tuple[datetime, datetime]:
+        params = {
+            "lat": latitude,
+            "lng": longitude,
+            "date": day.isoformat(),
+            "formatted": 0,
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.get(self.SUN_API_URL, params=params)
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise HTTPException(status_code=502, detail="Sun provider returned an error")
+            except httpx.RequestError:
+                raise HTTPException(status_code=503, detail="Sun provider unreachable")
+
+        payload = response.json()
+        if payload.get("status") != "OK":
+            raise HTTPException(status_code=502, detail="Invalid sunrise/sunset response")
+
+        result = payload.get("results")
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=502, detail="Invalid sunrise/sunset response")
+
+        try:
+            sunrise_raw = str(result["sunrise"])
+            sunset_raw = str(result["sunset"])
+            sunrise_utc = datetime.fromisoformat(sunrise_raw.replace("Z", "+00:00"))
+            sunset_utc = datetime.fromisoformat(sunset_raw.replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(status_code=502, detail="Invalid sunrise/sunset response")
+
+        berlin_tz = ZoneInfo("Europe/Berlin")
+        return sunrise_utc.astimezone(berlin_tz), sunset_utc.astimezone(berlin_tz)
+
+    async def _add_zero_anchors_from_sun_times(
+        self,
+        parsed_points: list[tuple[datetime, float]],
+        latitude: float,
+        longitude: float,
+    ) -> list[tuple[datetime, float]]:
+        if not parsed_points:
+            return parsed_points
+
+        point_days = sorted({ts.date() for ts, _ in parsed_points})
+        with_anchors = list(parsed_points)
+
+        for day in point_days:
+            berlin_tz = ZoneInfo("Europe/Berlin")
+            min_sunrise = datetime.combine(day, self.MIN_SUNRISE_TIME, tzinfo=berlin_tz)
+            max_sunset = datetime.combine(day, self.MAX_SUNSET_TIME, tzinfo=berlin_tz)
+
+            try:
+                sunrise_ts, sunset_ts = await self._fetch_sunrise_sunset_for_day(latitude, longitude, day)
+            except HTTPException:
+                sunrise_ts = min_sunrise
+                sunset_ts = max_sunset
+
+            if sunrise_ts < min_sunrise:
+                sunrise_ts = min_sunrise
+            if sunset_ts > max_sunset:
+                sunset_ts = max_sunset
+
+            if sunrise_ts >= sunset_ts:
+                sunrise_ts = min_sunrise
+                sunset_ts = max_sunset
+
+            # Always persist hard day bounds so downstream interpolation has fixed zero anchors.
+            with_anchors.append((min_sunrise, 0.0))
+            with_anchors.append((max_sunset, 0.0))
+            with_anchors.append((sunrise_ts, 0.0))
+            with_anchors.append((sunset_ts, 0.0))
+
+        return self._merge_points_keep_lowest_energy(with_anchors)
+
+    def _run_has_required_zero_bound_anchors(
+        self,
+        points: list[PVForecastPoint],
+        target_days: list[date],
+    ) -> bool:
+        point_index: dict[date, set[time]] = {}
+        for point in points:
+            day = point.ts.date()
+            local_time = point.ts.timetz().replace(tzinfo=None)
+            point_index.setdefault(day, set()).add(local_time)
+
+        for day in target_days:
+            day_times = point_index.get(day, set())
+            if self.MIN_SUNRISE_TIME not in day_times or self.MAX_SUNSET_TIME not in day_times:
+                return False
+        return True
+
+    @staticmethod
+    def _to_aware_berlin(ts: datetime | None) -> datetime | None:
+        if ts is None:
+            return None
+        if ts.tzinfo is None:
+            return ts.replace(tzinfo=ZoneInfo("Europe/Berlin"))
+        return ts.astimezone(ZoneInfo("Europe/Berlin"))
+
+    def _should_refresh_run(
+        self,
+        pv: Photovoltaik,
+        run: PVForecastRun | None,
+        target_days: list[date],
+    ) -> bool:
+        if run is None:
+            return True
+        if not self._covers_target_days(run.points, target_days):
+            return True
+        if not self._run_has_required_zero_bound_anchors(run.points, target_days):
+            return True
+
+        pv_updated_at = self._to_aware_berlin(getattr(pv, "updated_at", None))
+        run_requested_at = self._to_aware_berlin(run.requested_at)
+        if pv_updated_at is None or run_requested_at is None:
+            return True
+
+        # Re-fetch only when PV config changed after forecast generation.
+        return pv_updated_at > run_requested_at
 
     async def _resolve_user_pv(self, db: AsyncSession, pv_id: Optional[int], pv_owner_id: int) -> Photovoltaik:
         try:
@@ -174,7 +441,7 @@ class PVForecastService:
 
     async def _create_forecast_for_pv(self, db: AsyncSession, pv: Photovoltaik, pv_owner_id: int):
         lat, lon, dec, az, kwp = pv.get_PV_data()
-        forecast = await self.fetch_data_api(lat, lon, dec, az, kwp)
+        forecast, requested_api = await self.fetch_data_api(lat, lon, dec, az, kwp)
 
         now_berlin = datetime.now(ZoneInfo("Europe/Berlin"))
         parsed_points: list[tuple[datetime, float]] = []
@@ -182,7 +449,9 @@ class PVForecastService:
             ts = datetime.fromisoformat(ts_raw.replace(" ", "T")).replace(
                 tzinfo=ZoneInfo("Europe/Berlin")
             )
-            parsed_points.append((ts, value))
+            parsed_points.append((ts, float(value)))
+
+        parsed_points = await self._add_zero_anchors_from_sun_times(parsed_points, lat, lon)
 
         target_day = min((ts.date() for ts, _ in parsed_points), default=now_berlin.date())
 
@@ -190,6 +459,7 @@ class PVForecastService:
             new_run = PVForecastRun(
                 pv_id=pv.id,
                 pv_owner_id=pv_owner_id,
+                requested_api=requested_api,
                 requested_at=now_berlin,
                 target_day=target_day,
             )
@@ -258,7 +528,7 @@ class PVForecastService:
 
         run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
 
-        if run is None or not self._covers_target_days(run.points, target_days):
+        if self._should_refresh_run(pv=pv, run=run, target_days=target_days):
             await self._create_forecast_for_pv(db, pv, pv_owner_id)
             run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
 
@@ -292,7 +562,7 @@ class PVForecastService:
         for pv in pvs:
             run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
 
-            if run is None or not self._covers_target_days(run.points, target_days):
+            if self._should_refresh_run(pv=pv, run=run, target_days=target_days):
                 await self._create_forecast_for_pv(db, pv, pv_owner_id)
                 run = await self._latest_run_for_pv(db, pv.id, pv_owner_id)
 
@@ -303,3 +573,20 @@ class PVForecastService:
 
 
         return forecasts
+
+
+## review api_pvgis_fallback
+import asyncio 
+
+async def _run():
+    service = PVForecastService()
+
+    dict1=await service._fetch_data_api_pvgis_fallback(51.0,13.7,20,180,3)
+
+    print(dict1)
+def main():
+    result = asyncio.run(_run())
+    print(result)
+
+if __name__ == "__main__":
+    main()

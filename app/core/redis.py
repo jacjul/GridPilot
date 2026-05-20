@@ -74,7 +74,7 @@ async def revoke_whole_family_db(jti_family, db):
     await db.execute(
         update(Token)
         .where(Token.jti_family == jti_family)
-        .values(revoked=True, revoked_at=datetime.now(timezone.utc))
+        .values(revoked=True, revoked_at=datetime.utcnow())
     )
     await db.commit()
     

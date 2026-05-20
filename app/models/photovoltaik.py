@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Mapped, mapped_column ,relationship
-from sqlalchemy import ForeignKey,Integer, Float
+from sqlalchemy import ForeignKey,Integer, Float, DateTime, func
 from typing import TYPE_CHECKING
+from datetime import datetime
 
 
 from app.db.database import Base
@@ -22,6 +23,12 @@ class Photovoltaik(Base):
     azimuth:Mapped[float]= mapped_column(Float ,nullable=False)
     kw_peak:Mapped[float]= mapped_column(Float ,nullable=False)
     einspeiseverguetung:Mapped[float] = mapped_column(Float,default =0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     owner_id:Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"),nullable=False, index=True)
     owner:Mapped["User"] = relationship("User", back_populates="photovoltaik_owned")
