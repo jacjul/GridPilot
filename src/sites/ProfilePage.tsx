@@ -3,7 +3,15 @@ import { useQuery } from "@tanstack/react-query"
 import { APIError, getAPI } from "../fetchAPI"
 import { CompactTable, KeyValueTable } from "../components/CompactTable"
 
-type Me = { id: number; name: string; lastname: string; username: string; email: string }
+type Me = {
+  id: number
+  name: string
+  lastname: string
+  username: string
+  email: string
+  annual_consumption_kwh: number
+  load_profile_type: "SLP" | "SLP_HEATPUMP"
+}
 type PV = { id: number; latitude: number; longitude: number; declination: number; azimuth: number; kw_peak: number; einspeiseverguetung: number }
 type EV = { id: number; ev_name?: string; kw_peak_loading: number; kwh_battery: number }
 type BESS = { id: number; name?: string; kw_peak_charge: number; kw_peak_discharge: number; kwh: number }

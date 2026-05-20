@@ -23,10 +23,14 @@ from app.core.security import (
 )
 from app.models.token import Token
 from app.models.user import User
-from app.schemas.user import UserMe, UserRegistration
+from app.schemas.user import LoadProfileType, UserConsumptionUpdate, UserMe, UserRegistration
 from app.db.database import get_async_db
 
 oauth2passwordbearer = OAuth2PasswordBearer(tokenUrl="/api/login")
+
+
+def _normalize_load_profile_type(value: str) -> LoadProfileType:
+    return "SLP_HEATPUMP" if value == "SLP_HEATPUMP" else "SLP"
 
 
 async def register_user(db: AsyncSession, user: UserRegistration) -> None:
@@ -170,5 +174,36 @@ async def get_current_user_service(db: AsyncSession, access_token: str) -> UserM
         lastname=user.lastname,
         username=user.username,
         email=user.email,
+        annual_consumption_kwh=float(user.annual_consumption_kwh),
+        load_profile_type=_normalize_load_profile_type(user.load_profile_type),
+    )
+
+
+async def update_user_consumption_service(
+    db: AsyncSession,
+    user_id: int,
+    payload: UserConsumptionUpdate,
+) -> UserMe:
+    if payload.annual_consumption_kwh <= 0:
+        raise HTTPException(status_code=422, detail="annual_consumption_kwh must be > 0")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.annual_consumption_kwh = payload.annual_consumption_kwh
+    user.load_profile_type = payload.load_profile_type
+    await db.commit()
+    await db.refresh(user)
+
+    return UserMe(
+        id=user.id,
+        name=user.name,
+        lastname=user.lastname,
+        username=user.username,
+        email=user.email,
+        annual_consumption_kwh=float(user.annual_consumption_kwh),
+        load_profile_type=_normalize_load_profile_type(user.load_profile_type),
     )
 

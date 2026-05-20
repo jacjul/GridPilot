@@ -20,6 +20,8 @@ class EVDowntimeRuleCreate(BaseModel):
     end_time: time
     valid_from: date | None = None
     valid_to: date | None = None
+    soc_target_start_pct: float | None = None
+    soc_target_end_pct: float | None = None
     tz_name: str = "Europe/Berlin"
 
 class EVDowntimeRuleUpdate(BaseModel):
@@ -28,7 +30,22 @@ class EVDowntimeRuleUpdate(BaseModel):
     end_time: time
     valid_from: date | None = None
     valid_to: date | None = None
+    soc_target_start_pct: float | None = None
+    soc_target_end_pct: float | None = None
     tz_name: str = "Europe/Berlin"
+
+
+class EVDowntimeRuleOut(BaseModel):
+    id: int
+    ev_id: int
+    weekdays_mask: int
+    start_time: time
+    end_time: time
+    valid_from: date | None = None
+    valid_to: date | None = None
+    soc_target_start_pct: float | None = None
+    soc_target_end_pct: float | None = None
+    tz_name: str
 
 
 class EVDowntimeExceptionCreate(BaseModel):

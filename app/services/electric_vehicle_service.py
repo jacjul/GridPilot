@@ -8,6 +8,13 @@ from app.schemas.user import UserMe
 from app.models.electric_vehicle import ElectricVehicle,EVDowntimeRule
 
 class EV_service():
+    @staticmethod
+    def _validate_soc_target(value: float | None, label: str) -> None:
+        if value is None:
+            return
+        if value < 0 or value > 100:
+            raise HTTPException(status_code=422, detail=f"{label} must be between 0 and 100")
+
     async def _assert_user_owns_ev(self, ev_id:int, user_id:int,db:AsyncSession):
         owned = await db.scalar(select(ElectricVehicle.id).where(ElectricVehicle.id ==ev_id,
                                             ElectricVehicle.owner_id == user_id ))
@@ -105,6 +112,8 @@ class EV_service():
     async def create_new_blocker(self, formdata:EVDowntimeRuleCreate,user:UserMe,db:AsyncSession):
         
         await self._assert_user_owns_ev(ev_id = formdata.ev_id, user_id = user.id ,db=db)
+        self._validate_soc_target(formdata.soc_target_start_pct, "soc_target_start_pct")
+        self._validate_soc_target(formdata.soc_target_end_pct, "soc_target_end_pct")
    
         new_blocker = EVDowntimeRule(**formdata.model_dump())
 
@@ -123,6 +132,8 @@ class EV_service():
     async def update_new_blocker(self, ev_id:int, rule_id:int, formdata:EVDowntimeRuleUpdate,user:UserMe,db:AsyncSession):
 
         await self._assert_user_owns_ev(ev_id = ev_id, user_id = user.id ,db=db)
+        self._validate_soc_target(formdata.soc_target_start_pct, "soc_target_start_pct")
+        self._validate_soc_target(formdata.soc_target_end_pct, "soc_target_end_pct")
 
         
         try:
@@ -143,6 +154,8 @@ class EV_service():
             end_time=formdata.end_time, 
             valid_from= formdata.valid_from,
             valid_to = formdata.valid_to,
+            soc_target_start_pct = formdata.soc_target_start_pct,
+            soc_target_end_pct = formdata.soc_target_end_pct,
             tz_name = formdata.tz_name
         ))
             await db.commit()
@@ -181,6 +194,32 @@ class EV_service():
         except SQLAlchemyError:
             await db.rollback()
             raise HTTPException(status_code=500, detail="Could not delete Downtime")
+
+    async def list_downtime_rules(self, ev_id: int, user: UserMe, db: AsyncSession):
+        await self._assert_user_owns_ev(ev_id=ev_id, user_id=user.id, db=db)
+
+        result = await db.execute(
+            select(EVDowntimeRule)
+            .where(EVDowntimeRule.ev_id == ev_id)
+            .order_by(EVDowntimeRule.id.asc())
+        )
+        rules = result.scalars().all()
+
+        return [
+            {
+                "id": rule.id,
+                "ev_id": rule.ev_id,
+                "weekdays_mask": rule.weekdays_mask,
+                "start_time": rule.start_time,
+                "end_time": rule.end_time,
+                "valid_from": rule.valid_from,
+                "valid_to": rule.valid_to,
+                "soc_target_start_pct": rule.soc_target_start_pct,
+                "soc_target_end_pct": rule.soc_target_end_pct,
+                "tz_name": rule.tz_name,
+            }
+            for rule in rules
+        ]
 
         
 

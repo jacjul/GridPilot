@@ -43,6 +43,8 @@ class EVDowntimeRule(Base):
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
     valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    soc_target_start_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    soc_target_end_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     tz_name: Mapped[str] = mapped_column(String(64), nullable=False, default="Europe/Berlin")
 
     vehicle: Mapped["ElectricVehicle"] = relationship("ElectricVehicle", back_populates="downtime_rules")

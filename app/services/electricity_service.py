@@ -142,14 +142,15 @@ class ElectricityService():
         return {"message": "success", "tariff_id": tariff_id}
 
     def _resolve_window(self, start_time=None, end_time=None):
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         start_dt = start_time or now
         end_dt = end_time or (start_dt + pd.Timedelta(days=2))
 
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=timezone.utc)
-        if end_dt.tzinfo is None:
-            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        # DB column is TIMESTAMP WITHOUT TIME ZONE, so bind naive UTC values.
+        if start_dt.tzinfo is not None:
+            start_dt = start_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        if end_dt.tzinfo is not None:
+            end_dt = end_dt.astimezone(timezone.utc).replace(tzinfo=None)
 
         if end_dt <= start_dt:
             raise HTTPException(status_code=422, detail="Invalid cause end time smaller then start time")
@@ -179,6 +180,8 @@ class ElectricityService():
         requested_dates = [date_item.date() for date_item in pd.date_range(start_time.date(), end_time.date(), freq="D")]
         missing_dates = [date_item for date_item in requested_dates if date_item not in existing_dates]
 
+        fetch_failed = False
+
         if missing_dates:
             missing_dates.sort()
             missing_ranges = []
@@ -203,9 +206,15 @@ class ElectricityService():
                         f"?bzn={market_zone_code}&start={range_start_date.strftime('%Y-%m-%d')}"
                         f"&end={range_end_date.strftime('%Y-%m-%d')}"
                     )
-                    response = await client.get(base_url)
+                    try:
+                        response = await client.get(base_url, timeout=20.0)
+                    except httpx.HTTPError:
+                        fetch_failed = True
+                        continue
+
                     if response.status_code != 200:
-                        raise HTTPException(status_code=503, detail="API calling error")
+                        fetch_failed = True
+                        continue
 
                     result = response.json()
                     seconds = result.get("unix_seconds")
@@ -215,7 +224,12 @@ class ElectricityService():
                     if len(seconds) != len(prices):
                         raise HTTPException(status_code=502, detail="EPEX data length mismatch")
 
-                    datetimes = pd.to_datetime(seconds, unit="s", utc=True).to_pydatetime().tolist()
+                    datetimes = (
+                        pd.to_datetime(seconds, unit="s", utc=True)
+                        .tz_convert(None)
+                        .to_pydatetime()
+                        .tolist()
+                    )
                     for dt, point_price in zip(datetimes, prices):
                         await db.merge(
                             DynamicPricePoints(
@@ -227,6 +241,12 @@ class ElectricityService():
 
             await db.commit()
             cached_points = await self._load_cached_points(market_zone, db, start_time, end_time)
+
+        if fetch_failed and not cached_points:
+            raise HTTPException(
+                status_code=503,
+                detail="Dynamic price provider unavailable and no cached prices for this time window",
+            )
 
         datetimes:list[datetime] = [point.timestamp for point in cached_points]
         prices:list[float] = [point.price for point in cached_points]

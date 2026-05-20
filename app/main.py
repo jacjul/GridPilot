@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from app.api.v1.router import router_v1
 from app.db.database import Base, async_engine
 
@@ -31,6 +32,25 @@ app.include_router(router_v1)
 async def create_tables_on_startup() -> None:
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Dev-time compatibility migration for existing DBs.
+        await conn.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS annual_consumption_kwh DOUBLE PRECISION DEFAULT 3500"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS load_profile_type VARCHAR(24) DEFAULT 'SLP'")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE ev_downtime_rule ADD COLUMN IF NOT EXISTS soc_target_start_pct DOUBLE PRECISION"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE ev_downtime_rule ADD COLUMN IF NOT EXISTS soc_target_end_pct DOUBLE PRECISION"
+            )
+        )
 
 origins=["localhost:5173","localhost"]
 

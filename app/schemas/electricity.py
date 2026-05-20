@@ -31,10 +31,11 @@ class ElectricityOut(BaseModel):
     is_active: bool
 
 class DynamicPricePointsOut(BaseModel):
-    
-    marketzone:MarketZone
-    timestamp:datetime
-    price:float
+    model_config = ConfigDict(from_attributes=True)
+
+    market_zone: MarketZone
+    timestamp: datetime
+    price: float
 
 class DynamicPricePointsGet(BaseModel):
     timestamps:list[datetime]

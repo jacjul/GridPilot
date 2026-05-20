@@ -15,7 +15,7 @@ def create_class_instance_BESS():
 
 
 @router_v1.post("/bess")
-async def create_bess(formdata:BESSCreateform,
+async def create_bess1(formdata:BESSCreateform,
                 user:Annotated[UserMe, Depends(get_current_user)],
                 db: Annotated[AsyncSession, Depends(get_async_db)],
                 bess_service:Annotated[BESSService,Depends(create_class_instance_BESS)]):
@@ -40,10 +40,10 @@ async def delete_bess(bess_id:int,
 
 @router_v1.get("/bess/{bess_id}")
 @router_v1.get("/bess")
-async def create_bess(bess_id:Annotated[Optional[int], None],
-                user:Annotated[UserMe, Depends(get_current_user)],
+async def create_bess(user:Annotated[UserMe, Depends(get_current_user)],
                 db: Annotated[AsyncSession, Depends(get_async_db)],
-                bess_service:Annotated[BESSService,Depends(create_class_instance_BESS)]):
+                bess_service:Annotated[BESSService,Depends(create_class_instance_BESS)],
+                bess_id: Optional[int] = None):
     result = await bess_service.get_bess(bess_id,user,db)
     return result
 

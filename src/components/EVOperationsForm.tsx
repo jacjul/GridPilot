@@ -22,7 +22,22 @@ type DowntimeUpdatePayload = {
   end_time: string
   valid_from?: string
   valid_to?: string
+  soc_target_start_pct?: number
+  soc_target_end_pct?: number
   tz_name?: string
+}
+
+type DowntimeRule = {
+  id: number
+  ev_id: number
+  weekdays_mask: number
+  start_time: string
+  end_time: string
+  valid_from?: string | null
+  valid_to?: string | null
+  soc_target_start_pct?: number | null
+  soc_target_end_pct?: number | null
+  tz_name: string
 }
 
 const dayBits = [
@@ -44,12 +59,30 @@ const EVOperationsForm = () => {
   const [kwPeakLoading, setKwPeakLoading] = useState<string>("")
   const [kwhBattery, setKwhBattery] = useState<string>("")
 
-  const [ruleId, setRuleId] = useState<number>(1)
-  const [startTime, setStartTime] = useState<string>("08:00")
-  const [endTime, setEndTime] = useState<string>("17:00")
-  const [validFrom, setValidFrom] = useState<string>("")
-  const [validTo, setValidTo] = useState<string>("")
-  const [selectedDays, setSelectedDays] = useState<Record<string, boolean>>({
+  const [newStartTime, setNewStartTime] = useState<string>("08:00")
+  const [newEndTime, setNewEndTime] = useState<string>("17:00")
+  const [newValidFrom, setNewValidFrom] = useState<string>("")
+  const [newValidTo, setNewValidTo] = useState<string>("")
+  const [newSocTargetStartPct, setNewSocTargetStartPct] = useState<string>("")
+  const [newSocTargetEndPct, setNewSocTargetEndPct] = useState<string>("")
+  const [newSelectedDays, setNewSelectedDays] = useState<Record<string, boolean>>({
+    Mon: true,
+    Tue: true,
+    Wed: true,
+    Thu: true,
+    Fri: true,
+    Sat: false,
+    Sun: false,
+  })
+
+  const [selectedRuleId, setSelectedRuleId] = useState<number | "">("")
+  const [editStartTime, setEditStartTime] = useState<string>("08:00")
+  const [editEndTime, setEditEndTime] = useState<string>("17:00")
+  const [editValidFrom, setEditValidFrom] = useState<string>("")
+  const [editValidTo, setEditValidTo] = useState<string>("")
+  const [editSocTargetStartPct, setEditSocTargetStartPct] = useState<string>("")
+  const [editSocTargetEndPct, setEditSocTargetEndPct] = useState<string>("")
+  const [editSelectedDays, setEditSelectedDays] = useState<Record<string, boolean>>({
     Mon: true,
     Tue: true,
     Wed: true,
@@ -96,13 +129,72 @@ const EVOperationsForm = () => {
     setKwhBattery(String(selectedEV.kwh_battery))
   }, [selectedEV])
 
-  const weekdaysMask = useMemo(
-    () => dayBits.reduce((mask, day) => (selectedDays[day.key] ? mask + day.bit : mask), 0),
-    [selectedDays]
+  const rules = useQuery<DowntimeRule[], APIError>({
+    queryKey: ["ev", selectedEvId, "downtime-rules"],
+    queryFn: () => getAPI(`/api/ev/${selectedEvId}/downtime-rules`, { token, credentials: "include" }),
+    enabled: Boolean(selectedEvId),
+  })
+
+  useEffect(() => {
+    if (!selectedRuleId && rules.data?.length) {
+      setSelectedRuleId(rules.data[0].id)
+    }
+  }, [rules.data, selectedRuleId])
+
+  const selectedRule = useMemo(
+    () => rules.data?.find((rule) => rule.id === selectedRuleId),
+    [rules.data, selectedRuleId]
   )
 
-  function toggleDay(dayKey: string) {
-    setSelectedDays((prev) => ({ ...prev, [dayKey]: !prev[dayKey] }))
+  function toInputTime(value: string): string {
+    return value.slice(0, 5)
+  }
+
+  function decodeWeekdaysMask(mask: number): Record<string, boolean> {
+    const decoded: Record<string, boolean> = {}
+    for (const day of dayBits) {
+      decoded[day.key] = (mask & day.bit) > 0
+    }
+    return decoded
+  }
+
+  useEffect(() => {
+    if (!selectedRule) {
+      return
+    }
+    setEditStartTime(toInputTime(selectedRule.start_time))
+    setEditEndTime(toInputTime(selectedRule.end_time))
+    setEditValidFrom(selectedRule.valid_from ?? "")
+    setEditValidTo(selectedRule.valid_to ?? "")
+    setEditSocTargetStartPct(
+      selectedRule.soc_target_start_pct === null || selectedRule.soc_target_start_pct === undefined
+        ? ""
+        : String(selectedRule.soc_target_start_pct)
+    )
+    setEditSocTargetEndPct(
+      selectedRule.soc_target_end_pct === null || selectedRule.soc_target_end_pct === undefined
+        ? ""
+        : String(selectedRule.soc_target_end_pct)
+    )
+    setEditSelectedDays(decodeWeekdaysMask(selectedRule.weekdays_mask))
+  }, [selectedRule])
+
+  const createWeekdaysMask = useMemo(
+    () => dayBits.reduce((mask, day) => (newSelectedDays[day.key] ? mask + day.bit : mask), 0),
+    [newSelectedDays]
+  )
+
+  const editWeekdaysMask = useMemo(
+    () => dayBits.reduce((mask, day) => (editSelectedDays[day.key] ? mask + day.bit : mask), 0),
+    [editSelectedDays]
+  )
+
+  function toggleCreateDay(dayKey: string) {
+    setNewSelectedDays((prev) => ({ ...prev, [dayKey]: !prev[dayKey] }))
+  }
+
+  function toggleEditDay(dayKey: string) {
+    setEditSelectedDays((prev) => ({ ...prev, [dayKey]: !prev[dayKey] }))
   }
 
   async function refreshSelectedEV() {
@@ -167,17 +259,32 @@ const EVOperationsForm = () => {
     }
   }
 
-  function buildDowntimePayload(): DowntimeUpdatePayload & { ev_id: number } {
+  function buildDowntimeCreatePayload(): DowntimeUpdatePayload & { ev_id: number } {
     if (!selectedEvId) {
       throw new Error("Choose an EV first")
     }
     return {
       ev_id: selectedEvId,
-      weekdays_mask: weekdaysMask,
-      start_time: startTime,
-      end_time: endTime,
-      valid_from: validFrom || undefined,
-      valid_to: validTo || undefined,
+      weekdays_mask: createWeekdaysMask,
+      start_time: newStartTime,
+      end_time: newEndTime,
+      valid_from: newValidFrom || undefined,
+      valid_to: newValidTo || undefined,
+      soc_target_start_pct: newSocTargetStartPct ? Number(newSocTargetStartPct) : undefined,
+      soc_target_end_pct: newSocTargetEndPct ? Number(newSocTargetEndPct) : undefined,
+      tz_name: "Europe/Berlin",
+    }
+  }
+
+  function buildDowntimeEditPayload(): DowntimeUpdatePayload {
+    return {
+      weekdays_mask: editWeekdaysMask,
+      start_time: editStartTime,
+      end_time: editEndTime,
+      valid_from: editValidFrom || undefined,
+      valid_to: editValidTo || undefined,
+      soc_target_start_pct: editSocTargetStartPct ? Number(editSocTargetStartPct) : undefined,
+      soc_target_end_pct: editSocTargetEndPct ? Number(editSocTargetEndPct) : undefined,
       tz_name: "Europe/Berlin",
     }
   }
@@ -186,12 +293,13 @@ const EVOperationsForm = () => {
     setError("")
     setMessage("")
     try {
-      const payload = buildDowntimePayload()
+      const payload = buildDowntimeCreatePayload()
       const res = await postAPI<{ message: string }>(`/api/ev/${payload.ev_id}/downtime-rules`, payload, {
         token,
         credentials: "include",
       })
       setMessage(res.message)
+      await queryClient.invalidateQueries({ queryKey: ["ev", selectedEvId, "downtime-rules"] })
       markAction("Created downtime rule")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Downtime create failed")
@@ -199,16 +307,20 @@ const EVOperationsForm = () => {
   }
 
   async function handlePatchDowntime() {
+    if (!selectedEvId || !selectedRuleId) {
+      setError("Select an existing downtime rule first")
+      return
+    }
     setError("")
     setMessage("")
     try {
-      const payload = buildDowntimePayload()
-      const { ev_id, ...body } = payload
-      const res = await patchAPI<{ message: string }>(`/api/ev/${ev_id}/downtime-rules/${ruleId}`, body, {
+      const payload = buildDowntimeEditPayload()
+      const res = await patchAPI<{ message: string }>(`/api/ev/${selectedEvId}/downtime-rules/${selectedRuleId}`, payload, {
         token,
         credentials: "include",
       })
       setMessage(res.message)
+      await queryClient.invalidateQueries({ queryKey: ["ev", selectedEvId, "downtime-rules"] })
       markAction("Patched downtime rule")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Downtime update failed")
@@ -216,19 +328,21 @@ const EVOperationsForm = () => {
   }
 
   async function handleDeleteDowntime() {
-    if (!selectedEvId) {
-      setError("Choose an EV first")
+    if (!selectedEvId || !selectedRuleId) {
+      setError("Select an existing downtime rule first")
       return
     }
     setError("")
     setMessage("")
     try {
-      const res = await deleteAPI<{ message: string }>(`/api/ev/${selectedEvId}/downtime-rules/${ruleId}`, {
+      const res = await deleteAPI<{ message: string }>(`/api/ev/${selectedEvId}/downtime-rules/${selectedRuleId}`, {
         token,
         credentials: "include",
       })
       setMessage(res.message)
+      await queryClient.invalidateQueries({ queryKey: ["ev", selectedEvId, "downtime-rules"] })
       markAction("Deleted downtime rule")
+      setSelectedRuleId("")
       setConfirmRuleDelete(false)
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Downtime delete failed")
@@ -292,56 +406,163 @@ const EVOperationsForm = () => {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-3">
-        <p className="mb-2 text-sm font-semibold text-slate-900">Downtime Rules (POST/PATCH/DELETE)</p>
-        <p className="mb-2 text-xs text-slate-500">Select weekdays and time window when this EV is not available for charging.</p>
+        <p className="mb-1 text-sm font-semibold text-slate-900">Downtime Rules for Selected EV</p>
+        <p className="mb-3 text-xs text-slate-500">These rules belong to {selectedEV?.ev_name || `EV #${selectedEV?.id ?? "-"}`}. Create new rules below or select an existing rule to update/delete.</p>
 
-        <div className="mb-3 flex flex-wrap gap-2">
-          {dayBits.map((day) => (
-            <button
-              key={day.key}
-              type="button"
-              className={`rounded-full border px-2 py-1 text-xs ${selectedDays[day.key] ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"}`}
-              onClick={() => toggleDay(day.key)}
-            >
-              {day.key}
-            </button>
-          ))}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="mb-2 text-xs font-semibold text-slate-800">Create New Rule</p>
+          <div className="mb-2 flex flex-wrap gap-2">
+            {dayBits.map((day) => (
+              <button
+                key={`create-${day.key}`}
+                type="button"
+                className={`rounded-full border px-2 py-1 text-xs ${newSelectedDays[day.key] ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"}`}
+                onClick={() => toggleCreateDay(day.key)}
+              >
+                {day.key}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <label className="text-xs text-slate-700">
+              Start Time
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="time" value={newStartTime} onChange={(e) => setNewStartTime(e.currentTarget.value)} />
+            </label>
+            <label className="text-xs text-slate-700">
+              End Time
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="time" value={newEndTime} onChange={(e) => setNewEndTime(e.currentTarget.value)} />
+            </label>
+            <label className="text-xs text-slate-700">
+              Valid From (optional)
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="date" value={newValidFrom} onChange={(e) => setNewValidFrom(e.currentTarget.value)} />
+            </label>
+            <label className="text-xs text-slate-700">
+              Valid To (optional)
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="date" value={newValidTo} onChange={(e) => setNewValidTo(e.currentTarget.value)} />
+            </label>
+            <label className="text-xs text-slate-700">
+              SOC at Downtime Start % (optional)
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={newSocTargetStartPct}
+                onChange={(e) => setNewSocTargetStartPct(e.currentTarget.value)}
+                placeholder="e.g. 80"
+              />
+            </label>
+            <label className="text-xs text-slate-700">
+              SOC at Downtime End % (optional)
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={newSocTargetEndPct}
+                onChange={(e) => setNewSocTargetEndPct(e.currentTarget.value)}
+                placeholder="e.g. 30"
+              />
+            </label>
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50" onClick={handleCreateDowntime} disabled={!hasInstances}>Create Rule</button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-          <label className="text-xs text-slate-700">
-            Rule ID (used for Patch/Delete)
-            <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="number" value={ruleId} onChange={(e) => setRuleId(Number(e.currentTarget.value))} />
-          </label>
-          <label className="text-xs text-slate-700">
-            Start Time
-            <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="time" value={startTime} onChange={(e) => setStartTime(e.currentTarget.value)} />
-          </label>
-          <label className="text-xs text-slate-700">
-            End Time
-            <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="time" value={endTime} onChange={(e) => setEndTime(e.currentTarget.value)} />
-          </label>
-          <label className="text-xs text-slate-700">
-            Valid From (optional)
-            <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="date" value={validFrom} onChange={(e) => setValidFrom(e.currentTarget.value)} />
-          </label>
-          <label className="text-xs text-slate-700">
-            Valid To (optional)
-            <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="date" value={validTo} onChange={(e) => setValidTo(e.currentTarget.value)} />
-          </label>
-        </div>
+        <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+          <p className="mb-2 text-xs font-semibold text-slate-800">Existing Rules (Select to Edit/Delete)</p>
 
-        <div className="mt-2 flex flex-wrap gap-2">
-          <button type="button" className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50" onClick={handleCreateDowntime} disabled={!hasInstances}>Create Rule</button>
-          <button type="button" className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50" onClick={handlePatchDowntime} disabled={!hasInstances}>Patch Rule</button>
-          {!confirmRuleDelete ? (
-            <button type="button" className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmRuleDelete(true)} disabled={!hasInstances}>Delete Rule</button>
-          ) : (
-            <>
-              <button type="button" className="rounded-lg border border-red-500 bg-red-50 px-3 py-1 text-xs text-red-700" onClick={handleDeleteDowntime}>Confirm Delete Rule</button>
-              <button type="button" className="rounded-lg border px-3 py-1 text-xs" onClick={() => setConfirmRuleDelete(false)}>Cancel</button>
-            </>
-          )}
+          <select
+            className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+            value={selectedRuleId}
+            onChange={(e) => setSelectedRuleId(e.currentTarget.value ? Number(e.currentTarget.value) : "")}
+            disabled={!rules.data?.length}
+          >
+            {!rules.data?.length && <option value="">No downtime rules for this EV</option>}
+            {rules.data?.map((rule) => (
+              <option key={rule.id} value={rule.id}>
+                Rule #{rule.id} | {rule.start_time.slice(0, 5)}-{rule.end_time.slice(0, 5)} | mask {rule.weekdays_mask} | start {rule.soc_target_start_pct ?? "-"}% | end {rule.soc_target_end_pct ?? "-"}%
+              </option>
+            ))}
+          </select>
+
+          <div className="my-2 flex flex-wrap gap-2">
+            {dayBits.map((day) => (
+              <button
+                key={`edit-${day.key}`}
+                type="button"
+                className={`rounded-full border px-2 py-1 text-xs ${editSelectedDays[day.key] ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"}`}
+                onClick={() => toggleEditDay(day.key)}
+                disabled={!selectedRuleId}
+              >
+                {day.key}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <label className="text-xs text-slate-700">
+              Start Time
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="time" value={editStartTime} onChange={(e) => setEditStartTime(e.currentTarget.value)} disabled={!selectedRuleId} />
+            </label>
+            <label className="text-xs text-slate-700">
+              End Time
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="time" value={editEndTime} onChange={(e) => setEditEndTime(e.currentTarget.value)} disabled={!selectedRuleId} />
+            </label>
+            <label className="text-xs text-slate-700">
+              Valid From (optional)
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="date" value={editValidFrom} onChange={(e) => setEditValidFrom(e.currentTarget.value)} disabled={!selectedRuleId} />
+            </label>
+            <label className="text-xs text-slate-700">
+              Valid To (optional)
+              <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" type="date" value={editValidTo} onChange={(e) => setEditValidTo(e.currentTarget.value)} disabled={!selectedRuleId} />
+            </label>
+            <label className="text-xs text-slate-700">
+              SOC at Downtime Start % (optional)
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={editSocTargetStartPct}
+                onChange={(e) => setEditSocTargetStartPct(e.currentTarget.value)}
+                disabled={!selectedRuleId}
+                placeholder="e.g. 80"
+              />
+            </label>
+            <label className="text-xs text-slate-700">
+              SOC at Downtime End % (optional)
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                value={editSocTargetEndPct}
+                onChange={(e) => setEditSocTargetEndPct(e.currentTarget.value)}
+                disabled={!selectedRuleId}
+                placeholder="e.g. 30"
+              />
+            </label>
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50" onClick={handlePatchDowntime} disabled={!selectedRuleId}>Patch Rule</button>
+            {!confirmRuleDelete ? (
+              <button type="button" className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmRuleDelete(true)} disabled={!selectedRuleId}>Delete Rule</button>
+            ) : (
+              <>
+                <button type="button" className="rounded-lg border border-red-500 bg-red-50 px-3 py-1 text-xs text-red-700" onClick={handleDeleteDowntime}>Confirm Delete Rule</button>
+                <button type="button" className="rounded-lg border px-3 py-1 text-xs" onClick={() => setConfirmRuleDelete(false)}>Cancel</button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

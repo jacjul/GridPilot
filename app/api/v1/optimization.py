@@ -1,4 +1,4 @@
-from fastapi import Depends
+from fastapi import Depends, Query
 from typing import Annotated 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,14 @@ def create_service_optimization():
 @router_v1.post("/optimization/day_ahead")
 async def optimize_day_ahead(user:Annotated[UserMe, Depends(get_current_user)],
                              db: Annotated[AsyncSession, Depends(get_async_db)],
-                             service:Annotated[OptimizationService,Depends(create_service_optimization)]):
+                             service:Annotated[OptimizationService,Depends(create_service_optimization)],
+                             horizon_days: Annotated[int, Query(ge=1, le=2)] = 1,
+                             enforce_terminal_bess_soc: bool | None = None):
     
-    result = await service.run_day_ahead(user, db)
+    result = await service.run_day_ahead(
+        user,
+        db,
+        horizon_days=horizon_days,
+        enforce_terminal_bess_soc=enforce_terminal_bess_soc,
+    )
     return result

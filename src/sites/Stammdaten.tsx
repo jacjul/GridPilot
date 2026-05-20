@@ -6,6 +6,7 @@ import ElectricityForm from "../components/ElectricityForm.tsx"
 import ElectricityManageForm from "../components/ElectricityManageForm.tsx"
 import BESSManageForm from "../components/BESSManageForm.tsx"
 import EVOperationsForm from "../components/EVOperationsForm.tsx"
+import UserConsumptionForm from "../components/UserConsumptionForm.tsx"
 
 
 //assets 
@@ -17,6 +18,7 @@ const Stammdaten = () => {
   { key: "pv",icon:<SolarPanel className="h-5 w-5"/>,accent : "#ca8a04", title: "Create PV", form: <PVForm /> },
   { key: "battery",icon:<BatteryMedium className="h-5 w-5"/>,accent : "#16a34a", title: "Create Battery", form: <BESSForm /> },
   { key: "electricity",icon:<PlugZap className="h-5 w-5"/>,accent : "#2563eb", title: "Create Tariff", form: <ElectricityForm /> },
+  { key: "demand-profile",icon:<PlugZap className="h-5 w-5"/>,accent : "#7c3aed", title: "Demand Profile", form: <UserConsumptionForm /> },
 ] as const;
 
     const manageCards = [
@@ -31,7 +33,7 @@ const Stammdaten = () => {
       <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-amber-50 via-white to-sky-50 p-4 shadow-sm">
         <h2 className="mb-1 text-xl font-semibold text-slate-900">Create Components</h2>
         <p className="mb-4 text-sm text-slate-600">Create EV, PV, battery, and electricity tariff entries here.</p>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           {createCards.map((card) => (
             <article key={card.key} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
               <div className="mb-3 flex items-center gap-2">

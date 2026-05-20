@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
 import Header from "./components/Header.tsx"
 import AuthPage from "./sites/AuthPage.tsx"
@@ -19,6 +20,17 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+  const [, setAuthTick] = useState(0)
+
+  useEffect(() => {
+    const onSessionExpired = () => {
+      setAuthTick((value) => value + 1)
+    }
+
+    window.addEventListener("auth:session-expired", onSessionExpired)
+    return () => window.removeEventListener("auth:session-expired", onSessionExpired)
+  }, [])
+
   return (
     <>
       <Header />

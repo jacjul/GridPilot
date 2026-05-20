@@ -21,6 +21,8 @@ class User(Base):
     username: Mapped[str] =mapped_column(String(70), unique=True,nullable=False, index=True)
     email: Mapped[str] =mapped_column(String(70), unique=True,nullable=False, index=True)
     hashed_password:Mapped[str] 
+    annual_consumption_kwh: Mapped[float] = mapped_column(default=3500.0)
+    load_profile_type: Mapped[str] = mapped_column(String(24), default="SLP")
     photovoltaik_owned:Mapped[list["Photovoltaik"]] = relationship(
         "Photovoltaik", back_populates="owner", cascade="all, delete-orphan",
         passive_deletes=True)

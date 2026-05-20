@@ -8,9 +8,9 @@ class BESSCreateform(BaseModel):
     kwh: float
 
 class BESSUpdateform(BaseModel):
-    name: Optional[str]
-    kw_peak_charge:Optional[float]
-    kw_peak_discharge:Optional[float]
-    kwh:Optional[float]
+    name: Optional[str] = None
+    kw_peak_charge: Optional[float] = None
+    kw_peak_discharge: Optional[float] = None
+    kwh: Optional[float] = None
 
 

@@ -23,6 +23,8 @@ export type APIOptions = {
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ""
+const SESSION_EXPIRED_EVENT = "auth:session-expired"
+let refreshInFlight: Promise<string | null> | null = null
 
 function createTimeoutSignal(timeoutMs: number): AbortSignal {
     const controller = new AbortController()
@@ -67,34 +69,81 @@ export async function requestAPI<T>(path: string, options: APIOptions = {}): Pro
     const timeoutSignal = createTimeoutSignal(timeoutMs)
     const mergedSignal = mergeSignals(signal, timeoutSignal)
 
-    const finalHeaders: HeadersInit = {
+    const buildHeaders = (accessToken?: string): HeadersInit => ({
         ...(body && !(body instanceof FormData) && !(body instanceof URLSearchParams)
             ? { "Content-Type": "application/json" }
             : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...(headers ?? {}),
-    }
+    })
 
     const finalBody =
         body && !(body instanceof FormData) && !(body instanceof URLSearchParams)
             ? JSON.stringify(body)
             : body
 
-    let response: Response
-
-    try {
-        response = await fetch(buildUrl(path), {
+    async function fetchWithToken(accessToken?: string): Promise<Response> {
+        try {
+            return await fetch(buildUrl(path), {
             method,
-            headers: finalHeaders,
+            headers: buildHeaders(accessToken),
             body: finalBody,
             signal: mergedSignal,
             credentials,
         })
-    } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-            throw new APIError(408, "Request timed out or was cancelled")
+        } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") {
+                throw new APIError(408, "Request timed out or was cancelled")
+            }
+            throw error
         }
-        throw error
+    }
+
+    async function refreshAccessToken(): Promise<string | null> {
+        if (refreshInFlight) {
+            return refreshInFlight
+        }
+
+        refreshInFlight = (async () => {
+        try {
+            const response = await fetch(buildUrl("/api/refresh"), {
+                method: "POST",
+                credentials: credentials ?? "include",
+            })
+
+            if (!response.ok) {
+                return null
+            }
+
+            const payload = await response.json() as { access_token?: string }
+            const newToken = payload.access_token
+            if (!newToken) {
+                return null
+            }
+
+            localStorage.setItem("access_token", newToken)
+            return newToken
+        } catch {
+            return null
+        } finally {
+            refreshInFlight = null
+        }
+        })()
+
+        return refreshInFlight
+    }
+
+    let response = await fetchWithToken(token)
+
+    // If access token is expired, try one silent refresh and retry once.
+    if (response.status === 401 && token) {
+        const refreshedToken = await refreshAccessToken()
+        if (refreshedToken) {
+            response = await fetchWithToken(refreshedToken)
+        } else {
+            localStorage.removeItem("access_token")
+            window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+        }
     }
 
     const contentType = response.headers.get("content-type") ?? ""
