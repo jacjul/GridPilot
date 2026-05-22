@@ -5,6 +5,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 import time
 import uuid 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.router import router_v1
 from app.db.database import Base, async_engine
@@ -31,16 +34,12 @@ from app.api.v1 import health
 
 from app.logger import logger,setup_logging
 
+limiter = Limiter(key_func=get_remote_address,default_limits=["50/min"])
 app = FastAPI()
+app.state.limiter = limiter 
+app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler )
+
 app.include_router(router_v1)
-
-
-
-
-
-
-
-
 
 
 

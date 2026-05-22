@@ -11,3 +11,4 @@ redis
 pulp
 alembic
 pytest
+slowapi
