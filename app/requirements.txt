@@ -10,3 +10,4 @@ pyjwt
 redis
 pulp
 alembic
+pytest

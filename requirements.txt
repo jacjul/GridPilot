@@ -9,3 +9,5 @@ pwdlib[argon2]
 pyjwt
 redis
 pulp
+pandas
+alembic
