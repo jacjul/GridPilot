@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
 
+from app.main import limiter
 from app.api.v1.router import router_v1
 from app.schemas.user import UserRegistration
 from app.db.database import get_async_db
@@ -10,14 +11,17 @@ from app.core.settings import settings
 from app.services.auth_service import login_issue_tokens, refresh_issue_tokens, register_user
 
 @router_v1.post("/register", status_code=201)
-async def register_new_user(user: UserRegistration, db: Annotated[AsyncSession, Depends(get_async_db)]):
+@limiter.limit("5/minute")
+async def register_new_user(request:Request, user: UserRegistration, db: Annotated[AsyncSession, Depends(get_async_db)]):
     await register_user(db, user)
 
     return {"message": "created successfully"}
 
 @router_v1.post("/login")
+@limiter.limit("5/minute")
 async def login(
     response: Response,
+    request:Request,
     user: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ):
@@ -36,6 +40,7 @@ async def login(
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router_v1.post("/refresh")
+@limiter.limit("5/minute")
 async def refresh_access_and_refresh_token(
     response: Response,
     request: Request,
@@ -58,6 +63,7 @@ async def refresh_access_and_refresh_token(
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 @router_v1.post("/logout")
+@limiter.limit("5/minute")
 async def logout(response: Response, request:Request, db:Annotated[AsyncSession, Depends(get_async_db)]):
 
     _ = request.cookies.get("refresh")

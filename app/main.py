@@ -8,10 +8,12 @@ import uuid
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
+from slowapi.middleware import SlowAPIMiddleware
 from app.api.v1.router import router_v1
-from app.db.database import Base, async_engine
+from app.db.database import Base, async_engine,get_async_db
 from app.core.settings import settings
+from app.schemas.user import UserMe
+from app.services.auth_service import get_current_user
 # Ensure all ORM models are imported so SQLAlchemy metadata is populated.
 from app.models import battery  # noqa: F401
 from app.models import electric_vehicle  # noqa: F401
@@ -34,10 +36,19 @@ from app.api.v1 import health
 
 from app.logger import logger,setup_logging
 
-limiter = Limiter(key_func=get_remote_address,default_limits=["50/min"])
+def rate_limit_key(request:Request):
+    user = getattr(request.state,"user",None)
+
+    if user:
+        return f"user_id:{user.id}"
+    else:
+        return f"ip:{get_remote_address}"
+    
+limiter = Limiter(key_func=rate_limit_key,default_limits=["50/min"])
 app = FastAPI()
 app.state.limiter = limiter 
 app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler )
+app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(router_v1)
 
@@ -109,6 +120,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_credentials=True
 )
+@app.middleware("http")
+async def add_user_data_for_rate_limiting(request:Request, call_next):
+    auth_header = request.headers.get("authorization")
+
+    if auth_header and auth_header.startswith("Bearer "):
+        access_token = auth_header.split(" ",1)[1]
+        async for db in get_async_db():
+            try:
+                user:UserMe = await get_current_user(db,access_token)
+                request.state.user = user
+            except:
+                request.state.user = None
+    else:
+        request.state.user = None
+    response = call_next(request)
+    return response 
 
 setup_logging(settings.LOG_LEVEL)
 @app.middleware("http")
