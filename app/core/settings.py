@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     ENV:str = "prod"
 
     DATABASE_URL:str
-    REDIS_URL:str
+    REDIS_URL_AUTH:str
+    REDIS_URL_CELERY:str
+
 
     SECRET_KEY :str
     ALGORITHM : str

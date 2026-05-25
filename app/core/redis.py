@@ -6,7 +6,9 @@ from sqlalchemy import update
 from app.core.settings import settings
 from app.models.token import Token
 
-r = cast(Any, Redis.from_url(settings.REDIS_URL, decode_responses=True))
+
+## this initiates for r auth
+r = cast(Any, Redis.from_url(settings.REDIS_URL_AUTH, decode_responses=True))
 
 async def get_refresh_state(jti: str) -> tuple[str | None, str | None, str | None, str | None]:
     key = f"auth:rt:jti:{jti}"

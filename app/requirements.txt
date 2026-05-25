@@ -12,3 +12,4 @@ pulp
 alembic
 pytest
 slowapi
+celery

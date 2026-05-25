@@ -6,11 +6,12 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import update, select, and_, delete
 from typing import Any
 from datetime import datetime, timezone
+from sqlalchemy.dialects.postgresql import insert
 
 from app.schemas.electricity import ElectricityCreateform,ElectricityUpdateForm,ElectricityOut,DynamicPricePointsOut,DynamicPricePointsGet
 from app.schemas.user import UserMe
 from app.models.price_electricity import ElectricityPrice, DynamicPricePoints,MarketZone
-
+from app.logger import logger 
 
 class ElectricityService():
     def _assert_user_data_is_correct(self, formdata: ElectricityCreateform):
@@ -251,6 +252,48 @@ class ElectricityService():
         datetimes:list[datetime] = [point.timestamp for point in cached_points]
         prices:list[float] = [point.price for point in cached_points]
         return datetimes, prices
+
+    async def fetch_EPEX_API_for_worker(self,db:AsyncSession):
+        market_zones = ["AT", "BE" ,"CH", "CZ", "DE-LU", "DE-AT-LU", "DK1","DK2"
+                        ,"FR","HU", "IT-North", "NL", "PL","SE","SI" ]
+        
+        errors = {}
+        for market_zone_code in market_zones:
+            base_url = "https://api.energy-charts.info/price"
+            f"?bzn={market_zone_code}"
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(base_url)
+                    result = response.json()
+                    seconds = result.get("unix_seconds")
+                    datetimes = pd.to_datetime(seconds,unit="s").dt.tz_localize("Europe/Berlin")
+                    prices = result.get("price")
+
+            
+            except httpx.HTTPError:
+                errors[market_zone_code] = "fetch error"
+
+                logger.exception("External API service of EPEX-spotmarket caused an error")
+                continue
+
+            try:
+                for price, datetime in zip(prices,datetimes):
+                    await db.merge(DynamicPricePoints(
+                        market_zone = market_zone_code,
+                        timestamp = datetime,
+                        price = price
+                    ))
+            except Exception as e:
+                errors[market_zone_code] = "db_error"
+                logger.exception(f"Error when writing EPEX data to db- following error: {e}")
+
+            await db.commit()
+            return errors
+
+
+
+        
 
     async def get_current_DynamicPricePoints(self, user: UserMe, db: AsyncSession):
 

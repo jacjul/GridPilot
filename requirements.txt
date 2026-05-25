@@ -12,3 +12,4 @@ pulp
 pandas
 alembic
 slowapi
+celery

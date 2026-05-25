@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 import time
 import uuid 
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import  _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -14,6 +14,9 @@ from app.db.database import Base, async_engine,get_async_db
 from app.core.settings import settings
 from app.schemas.user import UserMe
 from app.services.auth_service import get_current_user
+from typing import TYPE_CHECKING
+
+
 # Ensure all ORM models are imported so SQLAlchemy metadata is populated.
 from app.models import battery  # noqa: F401
 from app.models import electric_vehicle  # noqa: F401
@@ -35,23 +38,31 @@ from app.api.v1 import optimization
 from app.api.v1 import health
 
 from app.logger import logger,setup_logging
+from app.core.limiter import limiter
+from starlette.middleware.base import BaseHTTPMiddleware
 
-def rate_limit_key(request:Request):
-    user = getattr(request.state,"user",None)
-
-    if user:
-        return f"user_id:{user.id}"
-    else:
-        return f"ip:{get_remote_address}"
-    
-limiter = Limiter(key_func=rate_limit_key,default_limits=["50/min"])
 app = FastAPI()
 app.state.limiter = limiter 
-app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler )
-app.add_middleware(SlowAPIMiddleware)
+
+
+
+
 
 app.include_router(router_v1)
 
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+class _InitStateMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # ensure attribute exists so slowapi can safely inject headers
+        request.state.view_rate_limit = None
+        return await call_next(request)
+
+# register early initializer before SlowAPIMiddleware
+app.add_middleware(_InitStateMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.exception_handler(HTTPException)
@@ -134,7 +145,7 @@ async def add_user_data_for_rate_limiting(request:Request, call_next):
                 request.state.user = None
     else:
         request.state.user = None
-    response = call_next(request)
+    response = await  call_next(request)
     return response 
 
 setup_logging(settings.LOG_LEVEL)
@@ -153,7 +164,7 @@ async def create_general_logging(request:Request, call_next):
                          request.method,
                          request.url.path,
                            extra={"request_id":request_id})
-        raise
+        raise   
     duration_ms = round((time.perf_counter()-start_time) *1000,2)
 
     logger.info(msg=f"{request.method} - {request.url.path} - {response.status_code} -{duration_ms}",
@@ -162,3 +173,8 @@ async def create_general_logging(request:Request, call_next):
     response.headers["X-Request-ID"] = request_id
 
     return response 
+
+
+
+
+

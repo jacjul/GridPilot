@@ -1,14 +1,17 @@
 from fastapi import Depends, HTTPException, Response, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Annotated
+from typing import Annotated,TYPE_CHECKING
 
-from app.main import limiter
 from app.api.v1.router import router_v1
 from app.schemas.user import UserRegistration
 from app.db.database import get_async_db
 from app.core.settings import settings
 from app.services.auth_service import login_issue_tokens, refresh_issue_tokens, register_user
+
+from app.core.limiter import limiter
+
+
 
 @router_v1.post("/register", status_code=201)
 @limiter.limit("5/minute")
