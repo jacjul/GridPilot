@@ -160,7 +160,7 @@ class PVForecastService:
             return result[0] if result else {}
         if isinstance(result, dict):
             return result
-        raise ValueError("Unexpected forecast.solar response")
+        raise HTTPException(status_code = 503, detail = "Unexpected forecast.solar response")
 
     @staticmethod
     def _parse_pvgis_power_w(hour_entry: dict) -> float | None:
@@ -219,12 +219,13 @@ class PVForecastService:
             if payload is None:
                 if last_error:
                     raise last_error
-                raise ValueError("PVGIS fallback could not fetch data")
+                raise HTTPException(status_code=503, detail=f"Unexpected PVGIS response")
+
 
         outputs = payload.get("outputs", {})
         hourly = outputs.get("hourly")
         if not isinstance(hourly, list) or not hourly:
-            raise ValueError("Unexpected PVGIS response")
+            raise HTTPException(status_code=503, detail=f"Unexpected PVGIS response")
 
         lookup_by_month_day_hour: dict[tuple[int, int, int], float] = {}
         for row in hourly:
@@ -246,7 +247,7 @@ class PVForecastService:
             lookup_by_month_day_hour[key] = max(0.0, power_w)
 
         if not lookup_by_month_day_hour:
-            raise ValueError("PVGIS fallback had no usable hourly values")
+            raise HTTPException(status_code=503, detail="PVGIS fallback had no usable hourly values")
 
         result: dict[str, float] = {}
         horizon_hours = 48
@@ -259,7 +260,7 @@ class PVForecastService:
             result[ts.strftime("%Y-%m-%d %H:%M:%S")] = energy_wh
 
         if not result:
-            raise ValueError("PVGIS fallback could not build forecast")
+            raise HTTPException(status_code=503, detail=f"Unexpected PVGIS response")
 
         return result
 

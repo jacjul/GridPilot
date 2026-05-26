@@ -16,4 +16,4 @@ def rate_limit_key(request:Request):
         return f"ip:{ip}"
     
 
-limiter = Limiter(key_func=rate_limit_key, default_limits=["200/min"], swallow_errors=True)
+limiter = Limiter(key_func=rate_limit_key, default_limits=["200/min"], auto_check=False)

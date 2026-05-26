@@ -22,7 +22,6 @@ const marketZones = [
   "CH",
   "CZ",
   "DE-LU",
-  "DE-AT-LU",
   "DK1",
   "DK2",
   "FR",
@@ -31,7 +30,6 @@ const marketZones = [
   "NL",
   "NO2",
   "PL",
-  "SE4",
   "SI",
 ] as const;
 

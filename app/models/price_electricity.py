@@ -56,7 +56,7 @@ class DynamicPricePoints(Base):
     __tablename__ ="dynamic_price_points"
 
     market_zone:Mapped[MarketZone] = mapped_column(default=MarketZone.DE_LU, primary_key=True)
-    timestamp:Mapped[datetime] =mapped_column( primary_key=True)
+    timestamp:Mapped[datetime] =mapped_column(DateTime(timezone=True), primary_key=True)
     price:Mapped[float] = mapped_column(Float)
 
 # https://api.energy-charts.info/#/prices/day_ahead_price_price_get  

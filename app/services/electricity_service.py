@@ -2,11 +2,13 @@ import pandas as pd
 import httpx
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import update, select, and_, delete
 from typing import Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone,time,timedelta
 from sqlalchemy.dialects.postgresql import insert
+from zoneinfo import ZoneInfo
 
 from app.schemas.electricity import ElectricityCreateform,ElectricityUpdateForm,ElectricityOut,DynamicPricePointsOut,DynamicPricePointsGet
 from app.schemas.user import UserMe
@@ -142,16 +144,12 @@ class ElectricityService():
 
         return {"message": "success", "tariff_id": tariff_id}
 
-    def _resolve_window(self, start_time=None, end_time=None):
-        now = datetime.utcnow()
-        start_dt = start_time or now
+    def _resolve_window(self, start_time=None, end_time=None)->tuple[datetime,datetime]:
+        now_at_00 = datetime.now(ZoneInfo("Europe/Berlin")).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_dt = start_time or now_at_00
         end_dt = end_time or (start_dt + pd.Timedelta(days=2))
 
-        # DB column is TIMESTAMP WITHOUT TIME ZONE, so bind naive UTC values.
-        if start_dt.tzinfo is not None:
-            start_dt = start_dt.astimezone(timezone.utc).replace(tzinfo=None)
-        if end_dt.tzinfo is not None:
-            end_dt = end_dt.astimezone(timezone.utc).replace(tzinfo=None)
+
 
         if end_dt <= start_dt:
             raise HTTPException(status_code=422, detail="Invalid cause end time smaller then start time")
@@ -227,7 +225,7 @@ class ElectricityService():
 
                     datetimes = (
                         pd.to_datetime(seconds, unit="s", utc=True)
-                        .tz_convert(None)
+                        .tz_convert("Europe/Berlin")
                         .to_pydatetime()
                         .tolist()
                     )
@@ -253,23 +251,36 @@ class ElectricityService():
         prices:list[float] = [point.price for point in cached_points]
         return datetimes, prices
 
-    async def fetch_EPEX_API_for_worker(self,db:AsyncSession):
-        market_zones = ["AT", "BE" ,"CH", "CZ", "DE-LU", "DE-AT-LU", "DK1","DK2"
-                        ,"FR","HU", "IT-North", "NL", "PL","SE","SI" ]
+    def fetch_EPEX_API_for_worker(self,db:Session):
+        market_zones = ["AT", "BE" ,"CH", "CZ", "DE-LU", "DK1","DK2"
+                        ,"FR","HU", "IT-North", "NL", "PL","SI" ]
         
         errors = {}
         for market_zone_code in market_zones:
-            base_url = "https://api.energy-charts.info/price"
-            f"?bzn={market_zone_code}"
+            base_url = f"https://api.energy-charts.info/price?bzn={market_zone_code}"
 
             try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(base_url)
+                with httpx.Client(timeout=20.0) as client:
+                    response = client.get(base_url)
+                    if response.status_code !=200:
+                        errors[market_zone_code] = f"{response.status_code}"
+                        continue
+
                     result = response.json()
                     seconds = result.get("unix_seconds")
-                    datetimes = pd.to_datetime(seconds,unit="s").dt.tz_localize("Europe/Berlin")
                     prices = result.get("price")
+                    if not isinstance(seconds, list) or not isinstance(prices, list) or len(seconds) != len(prices):
+                        errors[market_zone_code] = "invalid_payload"
+                        continue
 
+                    datetimes = pd.to_datetime(seconds,unit="s",utc=True).tz_convert("Europe/Berlin").to_pydatetime()
+
+                    for price, datetime in zip(prices,datetimes):
+                        db.merge(DynamicPricePoints(
+                            market_zone = MarketZone(market_zone_code),
+                            timestamp = datetime,
+                            price = price
+                        ))
             
             except httpx.HTTPError:
                 errors[market_zone_code] = "fetch error"
@@ -277,34 +288,43 @@ class ElectricityService():
                 logger.exception("External API service of EPEX-spotmarket caused an error")
                 continue
 
-            try:
-                for price, datetime in zip(prices,datetimes):
-                    await db.merge(DynamicPricePoints(
-                        market_zone = market_zone_code,
-                        timestamp = datetime,
-                        price = price
-                    ))
             except Exception as e:
+                db.rollback()
                 errors[market_zone_code] = "db_error"
                 logger.exception(f"Error when writing EPEX data to db- following error: {e}")
 
-            await db.commit()
-            return errors
+        db.commit()
+        return errors
 
 
 
-        
+    async def _load_existing_price_points(self,market_zone_active, db, start_time, end_time)->tuple[list[datetime],list[float]]:
+        try:
+            result = await db.execute(select(DynamicPricePoints).where(DynamicPricePoints.market_zone ==market_zone_active,
+                                                            DynamicPricePoints.timestamp>=start_time,
+                                                            DynamicPricePoints.timestamp<=end_time).order_by(DynamicPricePoints.timestamp))
+            rows = result.scalars().all()
+            datetimes:list[datetime] = [row.timestamp for row in rows]
+            prices:list[float] = [row.price for row in rows]
+        except:
+            raise HTTPException(status_code=403, detail="Could not load the existing price points")
+        return datetimes,prices
 
     async def get_current_DynamicPricePoints(self, user: UserMe, db: AsyncSession):
 
-        result = await db.execute(select(ElectricityPrice)
+        result = await db.execute(select(ElectricityPrice.market_zone)
                                   .where(and_(ElectricityPrice.owner_id == user.id,
-                                              ElectricityPrice.price_typ == "dynamic_EPEX")))
-        elec_dynamic = result.scalar_one_or_none()
+                                              ElectricityPrice.price_typ == "dynamic_EPEX",
+                                              ElectricityPrice.is_active==True)))
+        market_zone_active = result.scalar()
 
-        if not elec_dynamic:
-            raise HTTPException(status_code=404, detail="There is no dynamic Tarif")
+        if not market_zone_active:
+            raise HTTPException(status_code=404, detail="There is no active dynamic Tarif")
 
         start_time, end_time = self._resolve_window()
-        datetimes, prices = await self._fetch_EPEX_data(elec_dynamic.market_zone, db, start_time, end_time)
+
+        datetimes,prices = await self._load_existing_price_points(market_zone_active, db, start_time, end_time)
+        if len(datetimes)==0 or min(datetimes) > start_time or max(datetimes) < end_time- timedelta(hours=10):  
+            logger.info("Had to fetch EPEX data again")
+            datetimes, prices = await self._fetch_EPEX_data(market_zone_active, db, start_time, end_time)
         return DynamicPricePointsGet(timestamps=datetimes, prices=prices)

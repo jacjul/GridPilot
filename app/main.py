@@ -53,6 +53,7 @@ app.include_router(router_v1)
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+### adding slowAPI middleware causes an error for the routes that dont use a limit, this can be avoided through custom middleware 
 
 class _InitStateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -62,6 +63,7 @@ class _InitStateMiddleware(BaseHTTPMiddleware):
 
 # register early initializer before SlowAPIMiddleware
 app.add_middleware(_InitStateMiddleware)
+
 app.add_middleware(SlowAPIMiddleware)
 
 
