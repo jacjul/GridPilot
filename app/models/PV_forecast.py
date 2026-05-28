@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import date, datetime
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer,Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 from typing import TYPE_CHECKING
@@ -34,3 +34,12 @@ class PVForecastPoint(Base):
 
     run:Mapped["PVForecastRun"] = relationship("PVForecastRun", back_populates="points")
 
+class PVMonthlyProfileFallback(Base):
+    __tablename__ = "pv_monthly_profile_fallback"
+    #__table_args__=(Index("ix_pv_monthly_pv_id", "pv_id"),)
+
+    pv_id:Mapped[int] = mapped_column(ForeignKey("photovoltaik.id",ondelete="CASCADE"), primary_key =True,index=True)
+    month:Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    hour:Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    energy_wh_avg:Mapped[float] = mapped_column(Float, nullable=False)
+    computed_at:Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

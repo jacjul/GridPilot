@@ -26,6 +26,7 @@ async def create_PV(formData:PVform,
                     pv_service:Annotated[PVForecastService,Depends(get_pv_service)]):
     
     result = await pv_service.create_new_PV(formData, user,db)
+    # this does create and also creates a celery backgroundjob for creating PVMonthlyProfileFallback
 
     return result
 

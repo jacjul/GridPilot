@@ -263,8 +263,8 @@ class OptimizationService:
         )
         pv_series_wh.loc[night_mask] = 0.0
 
-        # Convert Wh/slot -> kWh/slot.
-        kwh_series = (pv_series_wh / 1000.0).clip(lower=0.0)
+        # Convert Wh/slot -> kWh/slot. -> has to be divided by 4 since values are summation for an hour and we need to calculate to 1/4 hours
+        kwh_series = (pv_series_wh / (4*1000.0)).clip(lower=0.0)
 
         return kwh_series.astype(float).tolist()
 
@@ -682,11 +682,10 @@ class OptimizationService:
             avg_einspeiseverguetung = (summed_verguetung / pv_kw_peak_sum) if pv_kw_peak_sum > 0 else 0.0
             prices_einspeisung = [avg_einspeiseverguetung] * steps
 
-            target_days = [optimization_day + timedelta(days=offset) for offset in range(horizon_days)]
             forecasts = await pv_service.get_forecast_for_pvs(
                 db=db,
                 pv_owner_id=user.id,
-                target_days=target_days,
+                
             )
             kwh_pv = self._build_pv_kwh_vector(
                 forecasts=forecasts,
