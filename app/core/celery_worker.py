@@ -23,14 +23,15 @@ celery.conf.beat_schedule= {
     }
 }
 
-@celery.task(name="task.fetch_EPEX_data")
-def fetch_EPEX_data():
-    
+@celery.task(name="task.fetch_EPEX_data", bind=True)
+def fetch_EPEX_data(self):
     with SessionCelery() as session:
         elec_service = ElectricityService()
-
-        response = elec_service.fetch_EPEX_API_for_worker(session)
-
+        try:
+            # add a small delay between per-zone requests to avoid hitting rate limits
+            response = elec_service.fetch_EPEX_API_for_worker(session, delay_between_requests=1.0)
+        except Exception as exc:
+            raise self.retry(countdown=30, max_retries=5)
     return response
     
 

@@ -1,5 +1,6 @@
 import pandas as pd
 import httpx
+import time as time_module
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -251,7 +252,7 @@ class ElectricityService():
         prices:list[float] = [point.price for point in cached_points]
         return datetimes, prices
 
-    def fetch_EPEX_API_for_worker(self,db:Session):
+    def fetch_EPEX_API_for_worker(self, db: Session, delay_between_requests: float = 0.0):
         market_zones = ["AT", "BE" ,"CH", "CZ", "DE-LU", "DK1","DK2"
                         ,"FR","HU", "IT-North", "NL", "PL","SI" ]
         
@@ -286,12 +287,19 @@ class ElectricityService():
                 errors[market_zone_code] = "fetch error"
 
                 logger.exception("External API service of EPEX-spotmarket caused an error")
+                # optionally pause after an error to avoid immediate retry storms
+                if delay_between_requests and delay_between_requests > 0:
+                    time_module.sleep(delay_between_requests)
                 continue
 
             except Exception as e:
                 db.rollback()
                 errors[market_zone_code] = "db_error"
                 logger.exception(f"Error when writing EPEX data to db- following error: {e}")
+
+            # polite delay between external requests to reduce rate-limit issues
+            if delay_between_requests and delay_between_requests > 0:
+                time_module.sleep(delay_between_requests)
 
         db.commit()
         return errors

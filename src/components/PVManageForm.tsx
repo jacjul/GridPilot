@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, deleteAPI, getAPI, patchAPI } from "../fetchAPI"
 import { KeyValueTable } from "./CompactTable"
 
@@ -29,7 +29,6 @@ const PVManageForm = () => {
   const [azimuth, setAzimuth] = useState<string>("")
   const [kwPeak, setKwPeak] = useState<string>("")
   const [einspeise, setEinspeise] = useState<string>("")
-  const [result, setResult] = useState<unknown>(null)
   const [error, setError] = useState<string>("")
   const [lastAction, setLastAction] = useState<string>("No action yet")
   const [confirmDelete, setConfirmDelete] = useState<boolean>(false)
@@ -47,6 +46,33 @@ const PVManageForm = () => {
 
   const hasInstances = Boolean(pvs.data?.length)
 
+  const selectedPvQuery = useQuery<unknown, APIError>({
+    queryKey: ["pv", "manage", "detail", pvId],
+    queryFn: () => getAPI(`/api/pv/${pvId}`, { token, credentials: "include" }),
+    enabled: false,
+  })
+
+  const patchMutation = useMutation<unknown, APIError, PVPatch>({
+    mutationFn: (payload) => patchAPI<unknown>(`/api/pv/${pvId}`, payload, { token, credentials: "include" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pv"] })
+      await queryClient.invalidateQueries({ queryKey: ["pv", "manage", "detail", pvId] })
+      markAction("Patched PV")
+    },
+  })
+
+  const deleteMutation = useMutation<unknown, APIError>({
+    mutationFn: () => deleteAPI<unknown>(`/api/pv/${pvId}`, { token, credentials: "include" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pv"] })
+      markAction("Deleted PV")
+      setPvId("")
+      setConfirmDelete(false)
+    },
+  })
+
+  const latestResult = deleteMutation.data ?? patchMutation.data ?? selectedPvQuery.data ?? null
+
   function markAction(action: string) {
     setLastAction(`${action} at ${new Date().toLocaleTimeString()}`)
   }
@@ -58,8 +84,7 @@ const PVManageForm = () => {
     }
     setError("")
     try {
-      const res = await getAPI<unknown>(`/api/pv/${pvId}`, { token, credentials: "include" })
-      setResult(res)
+      await selectedPvQuery.refetch()
       markAction("Fetched PV")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Get PV failed")
@@ -79,14 +104,11 @@ const PVManageForm = () => {
       kw_peak: kwPeak ? Number(kwPeak) : undefined,
       einspeiseverguetung: einspeise ? Number(einspeise) : undefined,
     }
-    try {
-      const res = await patchAPI<unknown>(`/api/pv/${pvId}`, payload, { token, credentials: "include" })
-      setResult(res)
-      await queryClient.invalidateQueries({ queryKey: ["pv"] })
-      markAction("Patched PV")
-    } catch (err) {
-      setError(err instanceof APIError ? err.message : "Update PV failed")
-    }
+    patchMutation.mutate(payload, {
+      onError: (err) => {
+        setError(err.message)
+      },
+    })
   }
 
   async function handleDelete() {
@@ -95,16 +117,11 @@ const PVManageForm = () => {
       return
     }
     setError("")
-    try {
-      const res = await deleteAPI<unknown>(`/api/pv/${pvId}`, { token, credentials: "include" })
-      setResult(res)
-      await queryClient.invalidateQueries({ queryKey: ["pv"] })
-      markAction("Deleted PV")
-      setPvId("")
-      setConfirmDelete(false)
-    } catch (err) {
-      setError(err instanceof APIError ? err.message : "Delete PV failed")
-    }
+    deleteMutation.mutate(undefined, {
+      onError: (err) => {
+        setError(err.message)
+      },
+    })
   }
 
   return (
@@ -131,21 +148,24 @@ const PVManageForm = () => {
         <input className="rounded border border-slate-300 px-2 py-1 text-sm" type="number" value={einspeise} onChange={(e) => setEinspeise(e.currentTarget.value)} placeholder="einspeiseverguetung" />
       </div>
       <div className="flex gap-2">
-        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handleGet} disabled={!hasInstances}>Get</button>
-        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handlePatch} disabled={!hasInstances}>Patch</button>
+        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handleGet} disabled={!hasInstances || selectedPvQuery.isFetching}>Get</button>
+        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handlePatch} disabled={!hasInstances || patchMutation.isPending}>Patch</button>
         {!confirmDelete ? (
-          <button type="button" className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmDelete(true)} disabled={!hasInstances}>Delete</button>
+          <button type="button" className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmDelete(true)} disabled={!hasInstances || deleteMutation.isPending}>Delete</button>
         ) : (
           <>
-            <button type="button" className="rounded border border-red-500 bg-red-50 px-2 py-1 text-xs text-red-700" onClick={handleDelete}>Confirm Delete</button>
-            <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button type="button" className="rounded border border-red-500 bg-red-50 px-2 py-1 text-xs text-red-700" onClick={handleDelete} disabled={deleteMutation.isPending}>Confirm Delete</button>
+            <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setConfirmDelete(false)} disabled={deleteMutation.isPending}>Cancel</button>
           </>
         )}
       </div>
       {!hasInstances ? <p className="text-xs text-amber-700">Create a PV first to use get/patch/delete.</p> : null}
       <p className="text-xs text-slate-500">Last action: {lastAction}</p>
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
-      <KeyValueTable data={result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : null} emptyMessage="No PV result" />
+      {selectedPvQuery.error ? <p className="text-xs text-red-600">{selectedPvQuery.error.message}</p> : null}
+      {patchMutation.error ? <p className="text-xs text-red-600">{patchMutation.error.message}</p> : null}
+      {deleteMutation.error ? <p className="text-xs text-red-600">{deleteMutation.error.message}</p> : null}
+      <KeyValueTable data={latestResult && typeof latestResult === "object" && !Array.isArray(latestResult) ? (latestResult as Record<string, unknown>) : null} emptyMessage="No PV result" />
     </div>
   )
 }

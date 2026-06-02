@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, deleteAPI, getAPI, patchAPI } from "../fetchAPI"
 import { KeyValueTable } from "./CompactTable"
 
@@ -29,7 +29,6 @@ const ElectricityManageForm = () => {
   const [fixedPrice, setFixedPrice] = useState<string>("")
   const [marketZone, setMarketZone] = useState<string>("")
   const [isActive, setIsActive] = useState<boolean>(false)
-  const [result, setResult] = useState<unknown>(null)
   const [error, setError] = useState<string>("")
   const [lastAction, setLastAction] = useState<string>("No action yet")
   const [confirmDelete, setConfirmDelete] = useState<boolean>(false)
@@ -47,6 +46,33 @@ const ElectricityManageForm = () => {
 
   const hasInstances = Boolean(tariffs.data?.length)
 
+  const selectedTariffQuery = useQuery<unknown, APIError>({
+    queryKey: ["electricity", "manage", "detail", tariffId],
+    queryFn: () => getAPI(`/api/electricity/${tariffId}`, { token, credentials: "include" }),
+    enabled: false,
+  })
+
+  const patchMutation = useMutation<unknown, APIError, ElectricityPatch>({
+    mutationFn: (payload) => patchAPI<unknown>(`/api/electricity/${tariffId}`, payload, { token, credentials: "include" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["electricity"] })
+      await queryClient.invalidateQueries({ queryKey: ["electricity", "manage", "detail", tariffId] })
+      markAction("Patched tariff")
+    },
+  })
+
+  const deleteMutation = useMutation<unknown, APIError>({
+    mutationFn: () => deleteAPI<unknown>(`/api/electricity/${tariffId}`, { token, credentials: "include" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["electricity"] })
+      markAction("Deleted tariff")
+      setTariffId("")
+      setConfirmDelete(false)
+    },
+  })
+
+  const latestResult = deleteMutation.data ?? patchMutation.data ?? selectedTariffQuery.data ?? null
+
   function markAction(action: string) {
     setLastAction(`${action} at ${new Date().toLocaleTimeString()}`)
   }
@@ -58,8 +84,7 @@ const ElectricityManageForm = () => {
     }
     setError("")
     try {
-      const res = await getAPI<unknown>(`/api/electricity/${tariffId}`, { token, credentials: "include" })
-      setResult(res)
+      await selectedTariffQuery.refetch()
       markAction("Fetched tariff")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Get tariff failed")
@@ -79,14 +104,11 @@ const ElectricityManageForm = () => {
       market_zone: marketZone || undefined,
       is_active: isActive,
     }
-    try {
-      const res = await patchAPI<unknown>(`/api/electricity/${tariffId}`, payload, { token, credentials: "include" })
-      setResult(res)
-      await queryClient.invalidateQueries({ queryKey: ["electricity"] })
-      markAction("Patched tariff")
-    } catch (err) {
-      setError(err instanceof APIError ? err.message : "Update tariff failed")
-    }
+    patchMutation.mutate(payload, {
+      onError: (err) => {
+        setError(err.message)
+      },
+    })
   }
 
   async function handleDelete() {
@@ -95,16 +117,11 @@ const ElectricityManageForm = () => {
       return
     }
     setError("")
-    try {
-      const res = await deleteAPI<unknown>(`/api/electricity/${tariffId}`, { token, credentials: "include" })
-      setResult(res)
-      await queryClient.invalidateQueries({ queryKey: ["electricity"] })
-      markAction("Deleted tariff")
-      setTariffId("")
-      setConfirmDelete(false)
-    } catch (err) {
-      setError(err instanceof APIError ? err.message : "Delete tariff failed")
-    }
+    deleteMutation.mutate(undefined, {
+      onError: (err) => {
+        setError(err.message)
+      },
+    })
   }
 
   return (
@@ -138,21 +155,24 @@ const ElectricityManageForm = () => {
         </label>
       </div>
       <div className="flex gap-2">
-        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handleGet} disabled={!hasInstances}>Get</button>
-        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handlePatch} disabled={!hasInstances}>Patch</button>
+        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handleGet} disabled={!hasInstances || selectedTariffQuery.isFetching}>Get</button>
+        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handlePatch} disabled={!hasInstances || patchMutation.isPending}>Patch</button>
         {!confirmDelete ? (
-          <button type="button" className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmDelete(true)} disabled={!hasInstances}>Delete</button>
+          <button type="button" className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmDelete(true)} disabled={!hasInstances || deleteMutation.isPending}>Delete</button>
         ) : (
           <>
-            <button type="button" className="rounded border border-red-500 bg-red-50 px-2 py-1 text-xs text-red-700" onClick={handleDelete}>Confirm Delete</button>
-            <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button type="button" className="rounded border border-red-500 bg-red-50 px-2 py-1 text-xs text-red-700" onClick={handleDelete} disabled={deleteMutation.isPending}>Confirm Delete</button>
+            <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setConfirmDelete(false)} disabled={deleteMutation.isPending}>Cancel</button>
           </>
         )}
       </div>
       {!hasInstances ? <p className="text-xs text-amber-700">Create an electricity tariff first to use get/patch/delete.</p> : null}
       <p className="text-xs text-slate-500">Last action: {lastAction}</p>
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
-      <KeyValueTable data={result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : null} emptyMessage="No tariff result" />
+      {selectedTariffQuery.error ? <p className="text-xs text-red-600">{selectedTariffQuery.error.message}</p> : null}
+      {patchMutation.error ? <p className="text-xs text-red-600">{patchMutation.error.message}</p> : null}
+      {deleteMutation.error ? <p className="text-xs text-red-600">{deleteMutation.error.message}</p> : null}
+      <KeyValueTable data={latestResult && typeof latestResult === "object" && !Array.isArray(latestResult) ? (latestResult as Record<string, unknown>) : null} emptyMessage="No tariff result" />
     </div>
   )
 }

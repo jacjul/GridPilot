@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, deleteAPI, getAPI, patchAPI } from "../fetchAPI"
 import { KeyValueTable } from "./CompactTable"
 
@@ -26,7 +26,6 @@ const BESSManageForm = () => {
   const [kwCharge, setKwCharge] = useState<string>("")
   const [kwDischarge, setKwDischarge] = useState<string>("")
   const [kwh, setKwh] = useState<string>("")
-  const [result, setResult] = useState<unknown>(null)
   const [error, setError] = useState<string>("")
   const [lastAction, setLastAction] = useState<string>("No action yet")
   const [confirmDelete, setConfirmDelete] = useState<boolean>(false)
@@ -50,6 +49,35 @@ const BESSManageForm = () => {
 
   const hasInstances = instances.length > 0
 
+  const selectedBessQuery = useQuery<unknown, APIError>({
+    queryKey: ["bess", "manage", "detail", bessId],
+    queryFn: () => getAPI(`/api/bess/${bessId}`, { token, credentials: "include" }),
+    enabled: false,
+  })
+
+  const patchMutation = useMutation<unknown, APIError, BESSPatch>({
+    mutationFn: (payload) => patchAPI<unknown>(`/api/bess/${bessId}`, payload, { token, credentials: "include" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["bess"] })
+      await queryClient.invalidateQueries({ queryKey: ["bess", "manage"] })
+      await queryClient.invalidateQueries({ queryKey: ["bess", "manage", "detail", bessId] })
+      markAction("Patched BESS")
+    },
+  })
+
+  const deleteMutation = useMutation<unknown, APIError>({
+    mutationFn: () => deleteAPI<unknown>(`/api/bess/${bessId}`, { token, credentials: "include" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["bess"] })
+      await queryClient.invalidateQueries({ queryKey: ["bess", "manage"] })
+      markAction("Deleted BESS")
+      setBessId("")
+      setConfirmDelete(false)
+    },
+  })
+
+  const latestResult = deleteMutation.data ?? patchMutation.data ?? selectedBessQuery.data ?? null
+
   function markAction(action: string) {
     setLastAction(`${action} at ${new Date().toLocaleTimeString()}`)
   }
@@ -61,8 +89,7 @@ const BESSManageForm = () => {
     }
     setError("")
     try {
-      const res = await getAPI<unknown>(`/api/bess/${bessId}`, { token, credentials: "include" })
-      setResult(res)
+      await selectedBessQuery.refetch()
       markAction("Fetched BESS")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Get BESS failed")
@@ -81,15 +108,11 @@ const BESSManageForm = () => {
       kw_peak_discharge: kwDischarge ? Number(kwDischarge) : undefined,
       kwh: kwh ? Number(kwh) : undefined,
     }
-    try {
-      const res = await patchAPI<unknown>(`/api/bess/${bessId}`, payload, { token, credentials: "include" })
-      setResult(res)
-      await queryClient.invalidateQueries({ queryKey: ["bess"] })
-      await queryClient.invalidateQueries({ queryKey: ["bess", "manage"] })
-      markAction("Patched BESS")
-    } catch (err) {
-      setError(err instanceof APIError ? err.message : "Update BESS failed")
-    }
+    patchMutation.mutate(payload, {
+      onError: (err) => {
+        setError(err.message)
+      },
+    })
   }
 
   async function handleDelete() {
@@ -98,17 +121,11 @@ const BESSManageForm = () => {
       return
     }
     setError("")
-    try {
-      const res = await deleteAPI<unknown>(`/api/bess/${bessId}`, { token, credentials: "include" })
-      setResult(res)
-      await queryClient.invalidateQueries({ queryKey: ["bess"] })
-      await queryClient.invalidateQueries({ queryKey: ["bess", "manage"] })
-      markAction("Deleted BESS")
-      setBessId("")
-      setConfirmDelete(false)
-    } catch (err) {
-      setError(err instanceof APIError ? err.message : "Delete BESS failed")
-    }
+    deleteMutation.mutate(undefined, {
+      onError: (err) => {
+        setError(err.message)
+      },
+    })
   }
 
   return (
@@ -134,21 +151,24 @@ const BESSManageForm = () => {
         <input className="rounded border border-slate-300 px-2 py-1 text-sm" type="number" value={kwh} onChange={(e) => setKwh(e.currentTarget.value)} placeholder="kwh" />
       </div>
       <div className="flex gap-2">
-        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handleGet} disabled={!hasInstances}>Get</button>
-        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handlePatch} disabled={!hasInstances}>Patch</button>
+        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handleGet} disabled={!hasInstances || selectedBessQuery.isFetching}>Get</button>
+        <button type="button" className="rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={handlePatch} disabled={!hasInstances || patchMutation.isPending}>Patch</button>
         {!confirmDelete ? (
-          <button type="button" className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmDelete(true)} disabled={!hasInstances}>Delete</button>
+          <button type="button" className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50" onClick={() => setConfirmDelete(true)} disabled={!hasInstances || deleteMutation.isPending}>Delete</button>
         ) : (
           <>
-            <button type="button" className="rounded border border-red-500 bg-red-50 px-2 py-1 text-xs text-red-700" onClick={handleDelete}>Confirm Delete</button>
-            <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button type="button" className="rounded border border-red-500 bg-red-50 px-2 py-1 text-xs text-red-700" onClick={handleDelete} disabled={deleteMutation.isPending}>Confirm Delete</button>
+            <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setConfirmDelete(false)} disabled={deleteMutation.isPending}>Cancel</button>
           </>
         )}
       </div>
       {!hasInstances ? <p className="text-xs text-amber-700">Create a battery first to use get/patch/delete.</p> : null}
       <p className="text-xs text-slate-500">Last action: {lastAction}</p>
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
-      <KeyValueTable data={result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : null} emptyMessage="No BESS result" />
+      {selectedBessQuery.error ? <p className="text-xs text-red-600">{selectedBessQuery.error.message}</p> : null}
+      {patchMutation.error ? <p className="text-xs text-red-600">{patchMutation.error.message}</p> : null}
+      {deleteMutation.error ? <p className="text-xs text-red-600">{deleteMutation.error.message}</p> : null}
+      <KeyValueTable data={latestResult && typeof latestResult === "object" && !Array.isArray(latestResult) ? (latestResult as Record<string, unknown>) : null} emptyMessage="No BESS result" />
     </div>
   )
 }

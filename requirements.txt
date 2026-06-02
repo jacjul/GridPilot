@@ -13,3 +13,6 @@ pandas
 alembic
 slowapi
 celery
+suntime
+seaborn
+matplotlib

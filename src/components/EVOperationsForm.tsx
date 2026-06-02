@@ -205,10 +205,7 @@ const EVOperationsForm = () => {
     setError("")
     setMessage("")
     try {
-      const ev = await getAPI<EV>(`/api/ev/${selectedEvId}`, { token, credentials: "include" })
-      setEvName(ev.ev_name || "")
-      setKwPeakLoading(String(ev.kw_peak_loading))
-      setKwhBattery(String(ev.kwh_battery))
+      await evs.refetch()
       setMessage("EV data refreshed")
       markAction("Fetched EV")
     } catch (err) {

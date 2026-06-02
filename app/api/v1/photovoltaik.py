@@ -69,17 +69,15 @@ async def delete_PV(pv_id:int,
 async def get_forecast_PV(user:Annotated[UserMe,Depends(get_current_user)],
                           db:Annotated[AsyncSession,Depends(get_async_db)],
                           pv_service:Annotated[PVForecastService,Depends(get_pv_service)],
-                          pv_id:Optional[int]=None,target_days:Optional[list[date]]=None):
+                          pv_id:Optional[int]=None):
     if pv_id is None:
         return await pv_service.get_forecast_for_pvs(
             db=db,
             pv_owner_id=user.id,
-            target_days=target_days,
         )
 
     return await pv_service.get_forecast_for_pv(
         db=db,
         pv_id=pv_id,
         pv_owner_id=user.id,
-        target_days=target_days,
     )
