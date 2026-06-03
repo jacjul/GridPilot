@@ -1,0 +1,15 @@
+services:
+  api:
+    ports: []
+    expose:
+      - "8000"
+    environment:
+      ENV: prod
+      SECURE_COOKIE: "true"
+      SAMESITE_COOKIE: "lax"
+      LOG_LEVEL: INFO
+
+  edge:
+    ports:
+      - "80:80"
+      - "443:443"
