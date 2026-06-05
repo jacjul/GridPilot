@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import {useMutation} from "@tanstack/react-query"
 import {postAPI,APIError} from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 type BESSCreate = {
     name?: string
     kw_peak_charge:number
@@ -21,7 +22,7 @@ const BESSForm = () => {
 
   const {mutate,isPending,error} = useMutation<BESSResponse,APIError,BESSCreate>({
     mutationFn: async(payload)=>{
-      return postAPI<BESSResponse>("/api/bess", payload,{token:localStorage.getItem("access_token")?? "",
+      return postAPI<BESSResponse>("/api/bess", payload,{token:getAccessToken() ?? "",
         credentials: "include"
       })
     },

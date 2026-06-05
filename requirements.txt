@@ -16,3 +16,4 @@ celery
 suntime
 seaborn
 matplotlib
+prometheus-fastapi-instrumentator

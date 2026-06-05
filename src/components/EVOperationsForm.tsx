@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Car } from "lucide-react"
 import { APIError, deleteAPI, getAPI, patchAPI, postAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 
 type EV = {
   id: number
@@ -51,7 +52,7 @@ const dayBits = [
 ] as const
 
 const EVOperationsForm = () => {
-  const token = localStorage.getItem("access_token") ?? ""
+  const token = getAccessToken() ?? ""
   const queryClient = useQueryClient()
 
   const [selectedEvId, setSelectedEvId] = useState<number | "">("")

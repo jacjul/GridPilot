@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {postAPI, APIError} from "../fetchAPI"
 import {useMutation} from "@tanstack/react-query"
+import { getAccessToken } from "../authStore"
 type PVResponse= {
     message:string
     latitude:number
@@ -24,7 +25,7 @@ const PVForm = () => {
     const {mutate,isPending,error} = useMutation<PVResponse,APIError,CreatePV>({
         mutationFn: async(payload)=>{
             return await postAPI<PVResponse>("/api/pv",payload,
-                {token : localStorage.getItem("access_token")??"",
+                {token : getAccessToken() ?? "",
                     credentials: "include"
                 })
             

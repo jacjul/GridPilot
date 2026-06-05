@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { APIError, postAPI } from "../fetchAPI"
+import {setAccessToken} from "../authStore"
 
 type RegisterPayload = {
   name: string
@@ -54,7 +55,7 @@ const AuthPage = () => {
         password: login.password,
       })
       const res = await postAPI<LoginResponse>("/api/login", body, { credentials: "include" })
-      localStorage.setItem("access_token", res.access_token)
+      setAccessToken(res.access_token)
       navigate("/home")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Login failed")
@@ -66,7 +67,8 @@ const AuthPage = () => {
     setMessage("")
     try {
       const res = await postAPI<LoginResponse>("/api/refresh", undefined, { credentials: "include" })
-      localStorage.setItem("access_token", res.access_token)
+      setAccessToken(res.access_token)
+
       setMessage("Token refreshed")
     } catch (err) {
       setError(err instanceof APIError ? err.message : "Refresh failed")

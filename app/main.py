@@ -15,7 +15,7 @@ from app.core.settings import settings
 from app.schemas.user import UserMe
 from app.services.auth_service import get_current_user
 from typing import TYPE_CHECKING
-
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Ensure all ORM models are imported so SQLAlchemy metadata is populated.
 from app.models import battery  # noqa: F401
@@ -42,11 +42,10 @@ from app.core.limiter import limiter
 from starlette.middleware.base import BaseHTTPMiddleware
 
 app = FastAPI()
+
+Instrumentator().instrument(app).expose(app)
+
 app.state.limiter = limiter 
-
-
-
-
 
 app.include_router(router_v1)
 
@@ -175,6 +174,17 @@ async def create_general_logging(request:Request, call_next):
     response.headers["X-Request-ID"] = request_id
 
     return response 
+
+
+CSRF_PATHS = {"/api/refresh", "/api/logout"}
+
+@app.middleware("http")
+async def csrf_origin_guard(request, call_next):
+  if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path in CSRF_PATHS:
+    origin = request.headers.get("origin")
+    if origin not in origins:
+      return JSONResponse(status_code=403, content={"detail": "Blocked by CSRF origin policy"})
+  return await call_next(request)
 
 
 

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query"
 import { postAPI, APIError } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 
 type PriceType = "fixed" | "dynamic_EPEX";
 
@@ -42,7 +43,7 @@ const ElectricityForm = () => {
   const { mutate, isPending, error } = useMutation<ElectricityResponse, APIError, ElectricityCreate>({
     mutationFn: async (payload) => {
       return postAPI<ElectricityResponse>("/api/electricity", payload, {
-        token: localStorage.getItem("access_token") ?? "",
+        token: getAccessToken() ?? "",
         credentials: "include"
       })
     },

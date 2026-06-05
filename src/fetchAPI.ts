@@ -1,3 +1,5 @@
+import { getAccessToken, setAccessToken } from "./authStore"
+
 export class APIError extends Error {
     statusCode: number
     details?: unknown
@@ -55,6 +57,19 @@ function buildUrl(path: string): string {
     return `${base}${route}`
 }
 
+function getCookieValue(name: string): string | null {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const match = document.cookie.match(new RegExp(`(?:^|; )${escaped}=([^;]*)`))
+    return match ? decodeURIComponent(match[1]) : null
+}
+
+function needsCsrfHeader(path: string, method: HttpMethod): boolean {
+    if (method !== "POST") {
+        return false
+    }
+    return path === "/api/refresh" || path === "/api/logout"
+}
+
 export async function requestAPI<T>(path: string, options: APIOptions = {}): Promise<T> {
     const {
         method = "GET",
@@ -66,14 +81,17 @@ export async function requestAPI<T>(path: string, options: APIOptions = {}): Pro
         credentials,
     } = options
 
+    const resolvedToken = token || getAccessToken() || undefined
     const timeoutSignal = createTimeoutSignal(timeoutMs)
     const mergedSignal = mergeSignals(signal, timeoutSignal)
+    const csrfToken = getCookieValue("csrf_token")
 
     const buildHeaders = (accessToken?: string): HeadersInit => ({
         ...(body && !(body instanceof FormData) && !(body instanceof URLSearchParams)
             ? { "Content-Type": "application/json" }
             : {}),
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...(csrfToken && needsCsrfHeader(path, method) ? { "X-CSRF-Token": csrfToken } : {}),
         ...(headers ?? {}),
     })
 
@@ -106,8 +124,10 @@ export async function requestAPI<T>(path: string, options: APIOptions = {}): Pro
 
         refreshInFlight = (async () => {
         try {
+            const refreshCsrfToken = getCookieValue("csrf_token")
             const response = await fetch(buildUrl("/api/refresh"), {
                 method: "POST",
+                headers: refreshCsrfToken ? { "X-CSRF-Token": refreshCsrfToken } : undefined,
                 credentials: credentials ?? "include",
             })
 
@@ -120,8 +140,7 @@ export async function requestAPI<T>(path: string, options: APIOptions = {}): Pro
             if (!newToken) {
                 return null
             }
-
-            localStorage.setItem("access_token", newToken)
+            setAccessToken(newToken)
             return newToken
         } catch {
             return null
@@ -133,15 +152,15 @@ export async function requestAPI<T>(path: string, options: APIOptions = {}): Pro
         return refreshInFlight
     }
 
-    let response = await fetchWithToken(token)
+    let response = await fetchWithToken(resolvedToken)
 
     // If access token is expired, try one silent refresh and retry once.
-    if (response.status === 401 && token) {
+    if (response.status === 401 && resolvedToken) {
         const refreshedToken = await refreshAccessToken()
         if (refreshedToken) {
             response = await fetchWithToken(refreshedToken)
         } else {
-            localStorage.removeItem("access_token")
+            setAccessToken(null)
             window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
         }
     }

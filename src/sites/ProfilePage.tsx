@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { APIError, getAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 import { CompactTable, KeyValueTable } from "../components/CompactTable"
 
 type Me = {
@@ -18,7 +19,7 @@ type BESS = { id: number; name?: string; kw_peak_charge: number; kw_peak_dischar
 type Electricity = { id: number; name: string; price_typ: string; fixed_price?: number | null; market_zone: string; is_active: boolean }
 
 const ProfilePage = () => {
-  const token = useMemo(() => localStorage.getItem("access_token") ?? "", [])
+  const token = getAccessToken() ?? ""
   const [bessId, setBessId] = useState<string>("")
 
   const me = useQuery<Me, APIError>({ queryKey: ["me"], queryFn: () => getAPI("/api/me", { token, credentials: "include" }) })

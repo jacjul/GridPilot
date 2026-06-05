@@ -13,3 +13,18 @@ services:
     ports:
       - "80:80"
       - "443:443"
+
+  prometheus:
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  alertmanager:
+    ports:
+      - "127.0.0.1:9093:9093"
+
+  grafana:
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}

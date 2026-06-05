@@ -1,0 +1,66 @@
+groups:
+  - name: gridpilot-platform
+    interval: 30s
+    rules:
+      - alert: ApiDown
+        expr: up{job="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: API target is down
+          description: Prometheus cannot scrape the API target for 2 minutes.
+
+      - alert: PostgresExporterDown
+        expr: up{job="postgres_exporter"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: Postgres exporter is down
+          description: Prometheus cannot scrape postgres_exporter for 3 minutes.
+
+      - alert: RedisExporterDown
+        expr: up{job="redis_exporter"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: Redis exporter is down
+          description: Prometheus cannot scrape redis_exporter for 3 minutes.
+
+      - alert: PrometheusTargetMissing
+        expr: absent(up{job="api"})
+        for: 3m
+        labels:
+          severity: warning
+          service: monitoring
+        annotations:
+          summary: API scrape target missing
+          description: No scrape target with job=api is currently present.
+
+  - name: gridpilot-prometheus
+    interval: 30s
+    rules:
+      - alert: PrometheusConfigurationReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: prometheus
+        annotations:
+          summary: Prometheus configuration reload failed
+          description: Prometheus failed to reload its configuration.
+
+      - alert: PrometheusTSDBReloadsFailing
+        expr: increase(prometheus_tsdb_reloads_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: prometheus
+        annotations:
+          summary: Prometheus TSDB reload failures
+          description: Prometheus TSDB reload failures were observed in the last 10 minutes.

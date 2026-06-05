@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, deleteAPI, getAPI, patchAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 import { KeyValueTable } from "./CompactTable"
 
 type Tariff = {
@@ -21,7 +22,7 @@ type ElectricityPatch = {
 }
 
 const ElectricityManageForm = () => {
-  const token = localStorage.getItem("access_token") ?? ""
+  const token = getAccessToken() ?? ""
   const queryClient = useQueryClient()
   const [tariffId, setTariffId] = useState<number | "">("")
   const [name, setName] = useState<string>("")

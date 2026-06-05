@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { postAPI, APIError } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 
 type CreateEV = {
   ev_name?: string
@@ -22,7 +23,7 @@ const EVForm = () => {
   const { mutate, isPending, error } = useMutation<EVResponse, APIError, CreateEV>({
     mutationFn: async (payload) => {
       return postAPI<EVResponse>("/api/ev", payload, {
-        token: localStorage.getItem("access_token") ?? undefined,
+        token: getAccessToken() ?? undefined,
         credentials: "include"
       })
     },

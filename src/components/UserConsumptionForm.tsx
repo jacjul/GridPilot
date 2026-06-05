@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, getAPI, patchAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 
 type LoadProfileType = "SLP" | "SLP_HEATPUMP"
 
@@ -16,7 +17,7 @@ type ConsumptionPayload = {
 }
 
 const UserConsumptionForm = () => {
-  const token = useMemo(() => localStorage.getItem("access_token") ?? "", [])
+  const token = getAccessToken() ?? ""
   const queryClient = useQueryClient()
   const [annualKwh, setAnnualKwh] = useState<string>("3500")
   const [profileType, setProfileType] = useState<LoadProfileType>("SLP")

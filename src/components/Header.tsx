@@ -1,22 +1,22 @@
 import { Link, useNavigate } from "react-router-dom"
 import { postAPI } from "../fetchAPI"
-
+import { getAccessToken, setAccessToken } from "../authStore"
 const navClass = "text-sm font-medium text-slate-700 hover:text-slate-900"
 
 const Header = () => {
   const navigate = useNavigate()
-  const isAuthed = Boolean(localStorage.getItem("access_token"))
+  const isAuthed = Boolean(getAccessToken())
 
   async function handleLogout() {
     try {
       await postAPI<{ message: string }>("/api/logout", undefined, {
-        token: localStorage.getItem("access_token") ?? "",
+        token: getAccessToken()?? "",
         credentials: "include",
       })
     } catch {
       // Ignore API errors, still clear local auth state.
     } finally {
-      localStorage.removeItem("access_token")
+      setAccessToken(null)
       navigate("/auth")
     }
   }

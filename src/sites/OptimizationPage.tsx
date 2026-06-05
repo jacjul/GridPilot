@@ -11,6 +11,7 @@ import {
 } from "recharts"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, getAPI, patchAPI, postAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 
 type OptimizationResponse = {
   status: string
@@ -202,7 +203,7 @@ function toInputTime(value: string): string {
 }
 
 const OptimizationPage = () => {
-  const token = useMemo(() => localStorage.getItem("access_token") ?? "", [])
+  const token = getAccessToken() ?? ""
   const queryClient = useQueryClient()
   const [result, setResult] = useState<OptimizationResponse | null>(null)
   const [error, setError] = useState<string>("")

@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { APIError, deleteAPI, patchAPI, postAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 
 type RulePayload = {
   ev_id: number
@@ -12,7 +13,7 @@ type RulePayload = {
 }
 
 const EVDowntimeForm = () => {
-  const token = localStorage.getItem("access_token") ?? ""
+  const token = getAccessToken() ?? ""
   const [evId, setEvId] = useState<number>(1)
   const [ruleId, setRuleId] = useState<number>(1)
   const [weekdaysMask, setWeekdaysMask] = useState<number>(62)

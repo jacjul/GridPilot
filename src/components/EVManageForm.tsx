@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { APIError, deleteAPI, getAPI, patchAPI } from "../fetchAPI"
+import { getAccessToken } from "../authStore"
 import { KeyValueTable } from "./CompactTable"
 
 type EVPatch = {
@@ -9,7 +10,7 @@ type EVPatch = {
 }
 
 const EVManageForm = () => {
-  const token = localStorage.getItem("access_token") ?? ""
+  const token = getAccessToken() ?? ""
   const [evId, setEvId] = useState<number>(1)
   const [evName, setEvName] = useState<string>("")
   const [kwPeakLoading, setKwPeakLoading] = useState<string>("")

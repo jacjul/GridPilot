@@ -6,10 +6,17 @@ import Home from "./sites/Home.tsx"
 import Stammdaten from "./sites/Stammdaten.tsx"
 import ProfilePage from "./sites/ProfilePage.tsx"
 import OptimizationPage from "./sites/OptimizationPage.tsx"
+import { getAccessToken, setAccessToken } from "./authStore"
+import { postAPI } from "./fetchAPI"
 import "./App.css"
 
+type LoginResponse = {
+  access_token: string
+  token_type: string
+}
+
 function isAuthenticated() {
-  return Boolean(localStorage.getItem("access_token"))
+  return Boolean(getAccessToken())
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -21,6 +28,45 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   const [, setAuthTick] = useState(0)
+  const [isAuthReady, setIsAuthReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function bootstrapAuth() {
+      if (getAccessToken()) {
+        if (!cancelled) {
+          setIsAuthReady(true)
+        }
+        return
+      }
+
+      try {
+        const res = await postAPI<LoginResponse>("/api/refresh", undefined, {
+          credentials: "include",
+          timeoutMs: 8000,
+        })
+        if (!cancelled) {
+          setAccessToken(res.access_token)
+        }
+      } catch {
+        if (!cancelled) {
+          setAccessToken(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthTick((value) => value + 1)
+          setIsAuthReady(true)
+        }
+      }
+    }
+
+    bootstrapAuth()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     const onSessionExpired = () => {
@@ -30,6 +76,14 @@ function App() {
     window.addEventListener("auth:session-expired", onSessionExpired)
     return () => window.removeEventListener("auth:session-expired", onSessionExpired)
   }, [])
+
+  if (!isAuthReady) {
+    return (
+      <main className="p-4 md:p-6">
+        <p className="text-sm text-slate-600">Restoring session...</p>
+      </main>
+    )
+  }
 
   return (
     <>
